@@ -3,6 +3,8 @@
 /backend-notes/
 /backend-lessons/
 /fastapi-production-boilerplate/
+/docs/learning/
+/*-learning/
 
 # Secrets and local overrides
 .env

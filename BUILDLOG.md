@@ -13,7 +13,7 @@ This file records decisions, misunderstandings, AI assistance, corrections, and 
 
 ### Decisions
 
-- Build in `widget-platform/`; do not edit the reference boilerplate.
+- Start in an isolated subdirectory so the reference boilerplate remains untouched. After identifying that this dedicated repository would otherwise expose two READMEs, flatten the application into the repository root.
 - Docker is the authoritative runtime.
 - Local JWT authentication is sufficient for the core.
 - Build the required core before stretch goals.
