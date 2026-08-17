@@ -1,0 +1,11 @@
+run: "docker compose up --build"
+seed: "PENDING"
+test: "uv run pytest"
+base_url: "http://localhost:8000"
+endpoints:
+  health: "/api/v1/system/health/live"
+  widgets: "/api/v1/widgets"
+  widget_config: "/api/v1/public/widgets/{public_id}/config"
+  submissions: "/api/v1/public/widgets/{public_id}/submissions"
+  dashboard: "/api/v1/dashboard/submissions"
+status: "design"

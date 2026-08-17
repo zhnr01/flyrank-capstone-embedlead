@@ -1,0 +1,29 @@
+# Local learning and reference material
+/Capstone - Embeddable Widget & Lead-Capture Platform.pdf
+/backend-notes/
+/backend-lessons/
+/fastapi-production-boilerplate/
+
+# Secrets and local overrides
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+.coverage
+htmlcov/
+
+# Build and IDE output
+build/
+dist/
+.vscode/
+.idea/
+.DS_Store
