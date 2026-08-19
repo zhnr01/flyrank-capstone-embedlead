@@ -34,11 +34,36 @@ widget-platform-backend-1  Up (healthy)
 widget-platform-db-1       Up (healthy)
 ```
 
+## Tenant/widget tracer
+
+- [x] Local demo bearer credentials resolve to server-owned identities; callers cannot encode tenant authority in the credential.
+- [x] Authenticated owner can create and read a widget.
+- [x] Widget rows persist in PostgreSQL through SQLAlchemy and the `0001_widgets` Alembic migration.
+- [x] A second tenant receives 404 when requesting the first tenant's widget.
+- [x] Container startup applies `alembic upgrade head` before Uvicorn serves HTTP, including from a freshly recreated empty PostgreSQL volume.
+
+Proof captured after the tenant/widget implementation:
+
+```text
+uv run pytest: 11 passed
+uv run ruff check app tests: All checks passed!
+uv run mypy app tests: Success: no issues found in 23 source files
+alembic current: 0001_widgets (head)
+PostgreSQL tables: alembic_version, widgets
+owner-alpha POST /api/v1/widgets: 201
+owner-alpha GET /api/v1/widgets/1: 200
+owner-beta GET /api/v1/widgets/1: 404 {"detail":"Widget not found"}
+```
+
+The credential registry is a local test seam, not production login. Signed token issuance/verification, persistent users, and membership tables remain pending.
+
 ## Widget management
 
-- [ ] Authenticated widget CRUD — PENDING
-- [ ] Unauthenticated requests rejected — PENDING
-- [ ] Tenant A cannot read or modify tenant B resources — PENDING
+- [x] Authenticated widget create/read tracer
+- [x] Unauthenticated requests rejected
+- [x] Tenant A cannot read tenant B resources
+- [ ] Real user login, signed tokens, and persistent memberships — PENDING
+- [ ] Widget update/delete/list — PENDING
 - [ ] Embed snippet generated per widget — PENDING
 
 ## Widget delivery

@@ -2,7 +2,7 @@
 
 A backend capstone for serving embeddable lead-capture widgets and safely accepting submissions from websites the platform does not control.
 
-> Project status: foundation in progress. The health and startup tracer is implemented and verified. Widget management, public submission, abuse protection, enrichment, delivery, and dashboard features are planned but not yet implemented.
+> Project status: foundation in progress. The health/startup tracer and the first tenant-scoped widget create/read tracer are implemented and verified. Real login, public submission, abuse protection, enrichment, delivery, and dashboard features are not yet implemented.
 
 ## Implemented now
 
@@ -14,6 +14,8 @@ A backend capstone for serving embeddable lead-capture widgets and safely accept
 - PostgreSQL 18 and the API running through Docker Compose.
 - Backend container running as an unprivileged user.
 - Automated API and failure-path tests, Ruff linting, and strict mypy checks.
+- Tenant-scoped widget create/read endpoints backed by a PostgreSQL migration.
+- A local demo-identity seam proving authorization behavior before real login exists.
 
 ## Why this system exists
 
@@ -38,7 +40,7 @@ Website visitor
   -> non-critical notification work
 ```
 
-Only the process and database health path is implemented today. The remaining paths are documented design targets, not completed features.
+The process/database health path and the first tenant/widget ownership path are implemented today. The remaining paths are documented design targets, not completed features.
 
 ## Architecture
 
@@ -64,6 +66,9 @@ PostgreSQL 18
 - `app/services/health.py` owns dependency checks and readiness decisions.
 - `app/core/db.py` owns the SQLAlchemy engine and database timeout configuration.
 - `app/core/config.py` owns typed environment configuration.
+- `app/api/routes/widgets.py` owns widget HTTP contracts and status mapping.
+- `app/repositories/widgets.py` owns tenant-scoped widget persistence.
+- `app/alembic/versions/0001_create_widgets.py` owns the first product schema migration.
 
 See [`docs/DESIGN.md`](docs/DESIGN.md) for the complete planned architecture, trust boundaries, data model, API surface, and explicit non-goals.
 
@@ -173,6 +178,32 @@ Unavailable database: HTTP `503`
 
 The public response exposes an error category, not the raw database exception message, connection string, SQL text, or credentials.
 
+### `POST /api/v1/widgets`
+
+This current tracer uses local demo credentials only:
+
+```text
+Authorization: Bearer owner-alpha
+```
+
+Request:
+
+```json
+{"name":"Contact form","kind":"contact"}
+```
+
+Response: HTTP `201`
+
+```json
+{"id":1,"name":"Contact form","kind":"contact"}
+```
+
+The server derives tenant scope from the server-owned demo identity. The request body cannot choose `tenant_id`.
+
+### `GET /api/v1/widgets/{id}`
+
+The authenticated owner receives HTTP `200`. A different tenant receives HTTP `404` so the API does not reveal whether the foreign widget exists.
+
 ## Reliability and security decisions
 
 - Liveness remains independent of external dependencies.
@@ -196,6 +227,8 @@ Reproducible command output and pending acceptance criteria are tracked in [`EVI
 |   `-- services/         # application health decisions
 |-- tests/api/            # API and failure-path tests
 |-- docs/DESIGN.md        # planned architecture and contracts
+|-- alembic.ini           # migration runner configuration
+|-- app/alembic/          # versioned product schema
 |-- Dockerfile
 |-- compose.yaml
 |-- pyproject.toml
@@ -209,7 +242,7 @@ Reproducible command output and pending acceptance criteria are tracked in [`EVI
 
 The next vertical slices are:
 
-1. Tenant model, local authentication, and tenant-isolated widget CRUD.
+1. Real users, signed authentication, memberships, and complete tenant-isolated widget CRUD.
 2. Public submission with validation and cross-origin behavior.
 3. Payload limits, per-IP/per-widget rate limits, and honeypot spam control.
 4. Geo-provider fallback with graceful degradation.
