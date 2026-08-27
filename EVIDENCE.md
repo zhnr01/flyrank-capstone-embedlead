@@ -137,8 +137,41 @@ Known limitation: the size guard reads the declared `Content-Length`. A streamin
 
 ## Abuse protection
 
-- [ ] Burst produces 429 while normal service remains available — PENDING
-- [ ] Honeypot submission is blocked without storage — PENDING
+- [x] Burst produces 429 while normal service remains available
+- [x] Honeypot submission is blocked without storage
+
+Runtime proof (migration head `0004_submissions`, backend healthy as uid=999(app)):
+
+```text
+burst of 9 POSTs from one IP, limit 5/60s
+  #1-#5  202 {"status":"accepted"}
+  #6-#9  429 {"detail":"Too many submissions, retry later"}   Retry-After: 60
+
+bypass attempt with X-Forwarded-For: 198.51.100.5
+  429  -> client-supplied forwarding header cannot mint a new limiter key
+
+per-widget storage check after the burst
+ widget_id | stored
+        11 |      5      -> the 4 blocked requests never reached PostgreSQL
+
+honeypot, widget 14
+  POST website="http://spam.example"  -> 202 {"status":"accepted"}
+  POST no website                     -> 202 {"status":"accepted"}
+  SELECT email FROM submissions WHERE widget_id = 14
+       good@example.com               -> bot row absent, legitimate row stored
+  backend log: honeypot triggered for widget 14
+```
+
+Legitimate traffic during a block is proven by `test_blocked_ip_does_not_block_a_different_ip`: a second client address receives 202 and its row is stored while the first address is at 429.
+
+Both responses to the honeypot are byte-identical, which is the point: an automated caller gets no signal to adapt to. The drop is therefore made visible to operators through a warning log line rather than a response difference.
+
+Known limitations, not yet closed:
+
+- Limiter state is in-process. With N workers the effective limit becomes N x limit; a shared store such as Redis is required to scale beyond one container.
+- A restart clears the state and forgives current offenders. Demonstrated during this proof: `docker compose restart backend` immediately allowed a previously blocked address.
+- The client address is the socket peer. Behind a reverse proxy this requires `--proxy-headers` plus an explicit trusted-proxy list before any forwarding header may be believed.
+- A honeypot stops naive bots only; a targeted attacker reads the rendered form and omits the field.
 
 ## Enrichment and side effects
 

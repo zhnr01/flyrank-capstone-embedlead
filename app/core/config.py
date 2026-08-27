@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = Field(default=15, gt=0, le=1_440)
     backend_cors_origins: list[str] = Field(default_factory=list)
     max_submission_bytes: int = Field(default=8_192, gt=0, le=1_048_576)
+    submission_rate_limit_per_ip: int = Field(default=5, gt=0, le=10_000)
+    submission_rate_limit_per_widget: int = Field(default=30, gt=0, le=100_000)
+    submission_rate_limit_window_seconds: int = Field(default=60, gt=0, le=3_600)
+    rate_limit_max_tracked_keys: int = Field(default=10_000, gt=0)
     postgres_server: str = "localhost"
     postgres_port: int = 5432
     postgres_db: str = "embedlead"

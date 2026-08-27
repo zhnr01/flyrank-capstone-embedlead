@@ -29,7 +29,7 @@ Status values:
 | 2 | Embed snippet generation | TODO | Per-widget `<script>` line not yet returned. |
 | 3 | Fast cached widget delivery | TODO | No config endpoint, no versioned bundle, no cache headers. |
 | 4 | Public submission endpoint | DONE | CORS + preflight, boundary validation, 413 guard, tenant-linked storage, all proven. |
-| 5 | Protection, enrichment, safe side effects | TODO | No rate limit, honeypot, geo chain, or side effect. |
+| 5 | Protection, enrichment, safe side effects | PARTIAL | Rate limiting and honeypot done and proven; geo chain and safe side effect still TODO. |
 | 6 | Owner dashboard API | TODO | No submission list or analytics. |
 
 ## Section 6 — definition of done
@@ -63,8 +63,8 @@ Status values:
 
 | Box | Status |
 |---|---|
-| Rate limiting returns 429 under burst; legitimate traffic still served | TODO |
-| At least one spam control demonstrably blocks a spam submission | TODO |
+| Rate limiting returns 429 under burst; legitimate traffic still served | DONE |
+| At least one spam control demonstrably blocks a spam submission | DONE |
 
 ### Enrichment and safe side effects
 
@@ -88,10 +88,10 @@ Status values:
 |---|---|---|
 | 1 | Valid submission from second-origin page → stored, 2xx, visible in dashboard | TODO |
 | 2 | Malformed and oversized payload → clean 4xx JSON, never 500 | DONE |
-| 3 | Burst → 429s appear, normal request right after still succeeds | TODO |
+| 3 | Burst → 429s appear, normal request right after still succeeds | DONE |
 | 4 | Geo A down → B enriches; both down → stored without geo | TODO |
 | 5 | Email/webhook side effect throws → submission still succeeds and is stored | TODO |
-| 6 | Honeypot filled → submission silently dropped or rejected | TODO |
+| 6 | Honeypot filled → submission silently dropped or rejected | DONE |
 
 ## Section 12 — eight shared requirements
 
@@ -104,7 +104,7 @@ Status values:
 | 5 | Idempotency where it matters — retried action happens once | TODO | Needed so a retried submission or notification does not duplicate. |
 | 6 | Secrets clean — env only, never logged | DONE | `.env` ignored, `.env.example` placeholders, production rejects the development key. |
 | 7 | Cost tracked if AI is used | N/A | No AI feature in this system. |
-| 8 | Tests that matter — the scary cases, deterministic | PARTIAL | Auth/tenant failure paths covered; abuse and dependency-failure cases pending. |
+| 8 | Tests that matter — the scary cases, deterministic | PARTIAL | Auth/tenant/CORS/oversized/abuse cases covered with an injected clock; dependency-failure cases pending. |
 
 ## Known defects found during compliance review
 

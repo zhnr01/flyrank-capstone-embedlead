@@ -21,6 +21,7 @@ A backend capstone for serving embeddable lead-capture widgets and safely accept
 - Login token endpoint with generic credential failures and membership gating.
 - Complete tenant-scoped widget lifecycle: create, read, cursor-paginated list, partial update, delete.
 - Public cross-origin submission endpoint with CORS preflight, boundary validation, and a payload size guard.
+- Abuse protection: per-IP and per-widget sliding-window rate limits with `Retry-After`, plus a honeypot spam control.
 
 ## Why this system exists
 
@@ -282,7 +283,20 @@ Behaviour:
 
 `tenant_id` is derived from the stored widget row; the payload cannot choose it, and unknown fields are rejected outright. The response deliberately contains no submission identifier so an anonymous caller learns nothing about internal state.
 
-Allowed origins come from `BACKEND_CORS_ORIGINS`. CORS is a browser policy, not authorization: a disallowed origin is denied a *readable response*, not denied the action. Abuse control for non-browser callers is rate limiting and spam control, which are not yet implemented.
+Allowed origins come from `BACKEND_CORS_ORIGINS`. CORS is a browser policy, not authorization: a disallowed origin is denied a *readable response*, not denied the action. Abuse control for non-browser callers is the rate limiting and spam control described below.
+
+#### Abuse protection on this endpoint
+
+| Control | Behaviour |
+|---|---|
+| per-IP rate limit | `SUBMISSION_RATE_LIMIT_PER_IP` requests per window, keyed on the socket peer |
+| per-widget rate limit | `SUBMISSION_RATE_LIMIT_PER_WIDGET` requests per window |
+| over the limit | `429` with `Retry-After` in seconds; the body does not reveal which limit tripped |
+| honeypot | a populated `website` field returns the ordinary `202` and stores nothing |
+
+`X-Forwarded-For` is deliberately ignored, because a client-supplied header would let any caller mint a fresh limiter key. Running behind a reverse proxy therefore requires `--proxy-headers` plus an explicit trusted-proxy list before any forwarding header may be believed.
+
+Limiter state is in-process: with N worker processes the effective limit becomes N x limit, and a restart clears it. A shared store such as Redis is required before scaling beyond a single container.
 
 ## Reliability and security decisions
 
