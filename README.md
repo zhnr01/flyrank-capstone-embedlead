@@ -18,6 +18,7 @@ A backend capstone for serving embeddable lead-capture widgets and safely accept
 - A signed-authentication foundation proving authorization behavior before a login endpoint exists.
 - Argon2 password hashing and signed, expiring access-token verification.
 - Persistent tenant, user, and membership authority tables.
+- Login token endpoint with generic credential failures and membership gating.
 
 ## Why this system exists
 
@@ -133,6 +134,24 @@ Docker Compose: backend healthy, PostgreSQL healthy
 The FastAPI test client currently emits a non-blocking upstream deprecation warning about `httpx`. It does not change the six passing test results.
 
 ## Current API
+
+### `POST /api/v1/auth/token`
+
+Exchanges a normalized email/password credential for a short-lived signed bearer token. Unknown email and wrong password return the same HTTP `401` response; a valid user without tenant membership receives HTTP `403`.
+
+```json
+{
+  "email": "owner@example.test",
+  "password": "<password>"
+}
+```
+
+```json
+{
+  "access_token": "<signed-access-token>",
+  "token_type": "bearer"
+}
+```
 
 ### `GET /api/v1/system/health/live`
 

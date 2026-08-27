@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from app.api.routes import system, widgets
+from app.api.routes import auth, system, widgets
 from app.core.config import settings
 
 app = FastAPI(
@@ -9,3 +9,4 @@ app = FastAPI(
 )
 app.include_router(system.router, prefix="/api/v1/system", tags=["system"])
 app.include_router(widgets.router, prefix="/api/v1")
+app.include_router(auth.router, prefix="/api/v1")

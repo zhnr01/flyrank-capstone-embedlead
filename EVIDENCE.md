@@ -69,7 +69,10 @@ The identity registry remains a local test seam rather than production membershi
 - [x] Migration head at runtime: `0002_memberships`; backend remained healthy as uid=999(app).
 - [x] Persistent users, tenants, and membership authority schema
 - [x] Server-side membership lookup for signed token subjects
-- [ ] Login endpoint and user lifecycle — PENDING
+- [x] Login token endpoint: valid credential 200, generic unknown/wrong-password 401, no-membership 403
+- [x] Runtime login proof: normalized valid credentials returned a bearer token with HTTP 200; wrong password and unknown email returned identical HTTP 401 bodies; the token created a protected widget with HTTP 201; credentials were not printed.
+- [x] Full suite: 24 tests passed; Ruff and strict mypy passed.
+- [ ] Registration, password reset, refresh/session lifecycle — PENDING
 
 ## Widget management
 

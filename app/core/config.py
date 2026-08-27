@@ -16,6 +16,7 @@ class Settings(BaseSettings):
         default="local-development-only-change-me-32-bytes",
         min_length=32,
     )
+    access_token_expire_minutes: int = Field(default=15, gt=0, le=1_440)
     postgres_server: str = "localhost"
     postgres_port: int = 5432
     postgres_db: str = "embedlead"
