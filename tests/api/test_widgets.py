@@ -122,3 +122,106 @@ def test_create_widget_rejects_unsupported_kind() -> None:
     )
 
     assert response.status_code == 422
+
+
+def test_owner_lists_only_its_widgets_newest_first() -> None:
+    first = client.post(
+        "/api/v1/widgets",
+        headers=auth_headers(7),
+        json={"name": "First", "kind": "contact"},
+    ).json()
+    second = client.post(
+        "/api/v1/widgets",
+        headers=auth_headers(7),
+        json={"name": "Second", "kind": "contact"},
+    ).json()
+    client.post(
+        "/api/v1/widgets",
+        headers=auth_headers(8),
+        json={"name": "Foreign", "kind": "contact"},
+    )
+
+    response = client.get("/api/v1/widgets", headers=auth_headers(7))
+
+    assert response.status_code == 200
+    assert [widget["id"] for widget in response.json()["data"]] == [
+        second["id"],
+        first["id"],
+    ]
+
+
+def test_widget_list_uses_cursor_without_duplicates() -> None:
+    ids = [
+        client.post(
+            "/api/v1/widgets",
+            headers=auth_headers(7),
+            json={"name": f"Widget {number}", "kind": "contact"},
+        ).json()["id"]
+        for number in range(3)
+    ]
+
+    first_page = client.get(
+        "/api/v1/widgets?limit=2",
+        headers=auth_headers(7),
+    ).json()
+    second_page = client.get(
+        f"/api/v1/widgets?limit=2&after_id={first_page['next_after_id']}",
+        headers=auth_headers(7),
+    ).json()
+
+    returned = [widget["id"] for widget in first_page["data"] + second_page["data"]]
+    assert returned == sorted(ids, reverse=True)
+    assert len(returned) == len(set(returned))
+
+
+def test_patch_changes_only_supplied_widget_fields() -> None:
+    widget = client.post(
+        "/api/v1/widgets",
+        headers=auth_headers(7),
+        json={"name": "Before", "kind": "contact"},
+    ).json()
+
+    response = client.patch(
+        f"/api/v1/widgets/{widget['id']}",
+        headers=auth_headers(7),
+        json={"name": "After"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {**widget, "name": "After"}
+
+
+def test_foreign_tenant_cannot_patch_widget() -> None:
+    widget = client.post(
+        "/api/v1/widgets",
+        headers=auth_headers(7),
+        json={"name": "Private", "kind": "contact"},
+    ).json()
+
+    response = client.patch(
+        f"/api/v1/widgets/{widget['id']}",
+        headers=auth_headers(8),
+        json={"name": "Stolen"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_delete_removes_widget_for_owner() -> None:
+    widget = client.post(
+        "/api/v1/widgets",
+        headers=auth_headers(7),
+        json={"name": "Delete me", "kind": "contact"},
+    ).json()
+
+    deleted = client.delete(
+        f"/api/v1/widgets/{widget['id']}",
+        headers=auth_headers(7),
+    )
+    missing = client.get(
+        f"/api/v1/widgets/{widget['id']}",
+        headers=auth_headers(7),
+    )
+
+    assert deleted.status_code == 204
+    assert missing.status_code == 404

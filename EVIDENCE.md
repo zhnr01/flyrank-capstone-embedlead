@@ -74,6 +74,15 @@ The identity registry remains a local test seam rather than production membershi
 - [x] Full suite: 24 tests passed; Ruff and strict mypy passed.
 - [ ] Registration, password reset, refresh/session lifecycle — PENDING
 
+## Widget resource lifecycle
+
+- [x] Tenant-scoped list with bounded cursor pagination, partial update, and delete.
+- [x] Runtime proof: two cursor pages returned descending IDs with no duplicates; PATCH changed only the supplied field (200); foreign-tenant PATCH and DELETE returned 404; empty PATCH body and `limit=500` returned 422; DELETE returned 204 and the later GET returned 404.
+- [x] Migration head at runtime: `0003_widget_list_index`; backend healthy as uid=999(app).
+- [x] `\d widgets` confirms `ix_widgets_tenant_id_id_desc` exists and the old single-column `ix_widgets_tenant_id` was dropped.
+- [ ] Index-backed list plan NOT yet demonstrated: with 6 rows PostgreSQL chose a sequential scan, which is correct for this size. `EXPLAIN (ANALYZE, BUFFERS)` must be re-run on a realistic row count before claiming index usage.
+- [x] Full suite: 29 tests passed; Ruff and strict mypy passed.
+
 ## Widget management
 
 - [x] Authenticated widget create/read tracer

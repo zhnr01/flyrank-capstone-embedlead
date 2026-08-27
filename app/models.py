@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, ForeignKey, String
+from sqlalchemy import BigInteger, ForeignKey, Index, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -38,11 +38,12 @@ class MembershipRecord(Base):
 class WidgetRecord(Base):
     __tablename__ = "widgets"
 
+    __table_args__ = (Index("ix_widgets_tenant_id_id_desc", "tenant_id", "id"),)
+
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     tenant_id: Mapped[int] = mapped_column(
         ForeignKey("tenants.id"),
         nullable=False,
-        index=True,
     )
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     kind: Mapped[str] = mapped_column(String(30), nullable=False)

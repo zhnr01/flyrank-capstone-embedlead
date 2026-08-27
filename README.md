@@ -19,6 +19,7 @@ A backend capstone for serving embeddable lead-capture widgets and safely accept
 - Argon2 password hashing and signed, expiring access-token verification.
 - Persistent tenant, user, and membership authority tables.
 - Login token endpoint with generic credential failures and membership gating.
+- Complete tenant-scoped widget lifecycle: create, read, cursor-paginated list, partial update, delete.
 
 ## Why this system exists
 
@@ -201,7 +202,7 @@ The public response exposes an error category, not the raw database exception me
 
 ### `POST /api/v1/widgets`
 
-This current tracer uses a signed local-development access token. Persistent users and memberships are not implemented yet.
+Callers obtain the token from `POST /api/v1/auth/token`. Tenant scope comes from the caller's persistent membership row.
 
 ```text
 Authorization: Bearer <signed-access-token>
@@ -224,6 +225,34 @@ The server verifies token signature, algorithm, expiry, and subject before resol
 ### `GET /api/v1/widgets/{id}`
 
 The authenticated owner receives HTTP `200`. A different tenant receives HTTP `404` so the API does not reveal whether the foreign widget exists.
+
+### `GET /api/v1/widgets`
+
+Returns the caller's widgets, newest identifier first, using bounded cursor pagination.
+
+```text
+GET /api/v1/widgets?limit=20&after_id=125
+```
+
+```json
+{"data":[{"id":124,"name":"Contact form","kind":"contact"}],"next_after_id":124}
+```
+
+`limit` accepts 1 to 100 and defaults to 20; larger values return HTTP `422`. `next_after_id` is `null` on the final page.
+
+### `PATCH /api/v1/widgets/{id}`
+
+Updates only the supplied fields.
+
+```json
+{"name":"Updated form"}
+```
+
+An empty object returns HTTP `422`. A widget owned by another tenant returns HTTP `404`.
+
+### `DELETE /api/v1/widgets/{id}`
+
+Returns HTTP `204` with no body for the owner, and HTTP `404` for a missing or foreign widget.
 
 ## Reliability and security decisions
 
