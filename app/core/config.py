@@ -1,3 +1,4 @@
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL
 
@@ -11,6 +12,10 @@ class Settings(BaseSettings):
 
     project_name: str = "EmbedLead Widget Platform"
     environment: str = "local"
+    secret_key: str = Field(
+        default="local-development-only-change-me-32-bytes",
+        min_length=32,
+    )
     postgres_server: str = "localhost"
     postgres_port: int = 5432
     postgres_db: str = "embedlead"
@@ -19,6 +24,14 @@ class Settings(BaseSettings):
     database_pool_timeout_seconds: int = 2
     database_connect_timeout_seconds: int = 2
     database_statement_timeout_ms: int = 2_000
+
+    @model_validator(mode="after")
+    def reject_development_secret_in_production(self) -> Settings:
+        if self.environment == "production" and self.secret_key.startswith(
+            "local-development-only-"
+        ):
+            raise ValueError("production requires a non-development secret key")
+        return self
 
     @property
     def database_url(self) -> URL:

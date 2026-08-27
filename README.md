@@ -16,6 +16,7 @@ A backend capstone for serving embeddable lead-capture widgets and safely accept
 - Automated API and failure-path tests, Ruff linting, and strict mypy checks.
 - Tenant-scoped widget create/read endpoints backed by a PostgreSQL migration.
 - A local demo-identity seam proving authorization behavior before real login exists.
+- Argon2 password hashing and signed, expiring access-token verification.
 
 ## Why this system exists
 
@@ -180,10 +181,10 @@ The public response exposes an error category, not the raw database exception me
 
 ### `POST /api/v1/widgets`
 
-This current tracer uses local demo credentials only:
+This current tracer uses a signed local-development access token. Persistent users and memberships are not implemented yet.
 
 ```text
-Authorization: Bearer owner-alpha
+Authorization: Bearer <signed-access-token>
 ```
 
 Request:
@@ -198,7 +199,7 @@ Response: HTTP `201`
 {"id":1,"name":"Contact form","kind":"contact"}
 ```
 
-The server derives tenant scope from the server-owned demo identity. The request body cannot choose `tenant_id`.
+The server verifies token signature, algorithm, expiry, and subject before resolving tenant scope from a temporary server-owned identity mapping. The request body cannot choose `tenant_id`.
 
 ### `GET /api/v1/widgets/{id}`
 

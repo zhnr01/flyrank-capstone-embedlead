@@ -1,13 +1,20 @@
 from collections.abc import Generator
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.widget_dependencies import get_widget_repository
+from app.core.auth import create_access_token
 from app.main import app
 from app.repositories.widgets import InMemoryWidgetRepository, WidgetRepository
 
 client = TestClient(app)
+
+
+def auth_headers(user_id: int) -> dict[str, str]:
+    token = create_access_token(f"user-{user_id}", timedelta(minutes=5))
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture(autouse=True)
@@ -29,7 +36,7 @@ def test_create_widget_requires_authentication() -> None:
 
 
 def test_authenticated_owner_can_create_and_read_widget() -> None:
-    headers = {"Authorization": "Bearer owner-alpha"}
+    headers = auth_headers(7)
     create_response = client.post(
         "/api/v1/widgets",
         headers=headers,
@@ -52,8 +59,8 @@ def test_authenticated_owner_can_create_and_read_widget() -> None:
 
 
 def test_tenant_cannot_read_another_tenants_widget() -> None:
-    first_headers = {"Authorization": "Bearer owner-alpha"}
-    second_headers = {"Authorization": "Bearer owner-beta"}
+    first_headers = auth_headers(7)
+    second_headers = auth_headers(8)
 
     create_response = client.post(
         "/api/v1/widgets",
@@ -82,10 +89,20 @@ def test_client_cannot_encode_tenant_authority_in_token() -> None:
     assert response.json() == {"detail": "Invalid authentication credentials"}
 
 
-def test_create_widget_rejects_unsupported_kind() -> None:
+def test_unsigned_demo_credential_is_rejected() -> None:
     response = client.post(
         "/api/v1/widgets",
         headers={"Authorization": "Bearer owner-alpha"},
+        json={"name": "Unsigned form", "kind": "contact"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_create_widget_rejects_unsupported_kind() -> None:
+    response = client.post(
+        "/api/v1/widgets",
+        headers=auth_headers(7),
         json={"name": "Unsupported form", "kind": "unknown"},
     )
 

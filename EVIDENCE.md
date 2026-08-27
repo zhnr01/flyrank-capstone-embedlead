@@ -55,7 +55,17 @@ owner-alpha GET /api/v1/widgets/1: 200
 owner-beta GET /api/v1/widgets/1: 404 {"detail":"Widget not found"}
 ```
 
-The credential registry is a local test seam, not production login. Signed token issuance/verification, persistent users, and membership tables remain pending.
+The identity registry remains a local test seam rather than production membership. Signed token creation and verification are now implemented; persistent users, login, and membership tables remain pending.
+
+## Authentication foundation
+
+- [x] Argon2 hashes verify the original password, reject a different password, and do not equal the original password.
+- [x] Signed access tokens require subject and expiry claims and an explicit HS256 algorithm allowlist.
+- [x] Tampered and expired tokens are rejected.
+- [x] Protected widget routes accept signed token subjects and reject the earlier unsigned demo credential format.
+- [x] Runtime proof: a signed token created a widget with HTTP 201; the old unsigned demo credential returned HTTP 401; the token was not printed.
+- [x] Full suite: 17 tests passed; Ruff and strict mypy passed.
+- [ ] Persistent users, login endpoint, tenants, and memberships — PENDING
 
 ## Widget management
 
