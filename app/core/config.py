@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     submission_rate_limit_per_widget: int = Field(default=30, gt=0, le=100_000)
     submission_rate_limit_window_seconds: int = Field(default=60, gt=0, le=3_600)
     rate_limit_max_tracked_keys: int = Field(default=10_000, gt=0)
+    geo_enrichment_enabled: bool = True
+    geo_provider_timeout_seconds: float = Field(default=1.0, gt=0, le=10)
     postgres_server: str = "localhost"
     postgres_port: int = 5432
     postgres_db: str = "embedlead"

@@ -22,6 +22,7 @@ A backend capstone for serving embeddable lead-capture widgets and safely accept
 - Complete tenant-scoped widget lifecycle: create, read, cursor-paginated list, partial update, delete.
 - Public cross-origin submission endpoint with CORS preflight, boundary validation, and a payload size guard.
 - Abuse protection: per-IP and per-widget sliding-window rate limits with `Retry-After`, plus a honeypot spam control.
+- Advisory IP geo enrichment with an ordered provider fallback chain that degrades to a stored row with no location.
 
 ## Why this system exists
 
@@ -297,6 +298,21 @@ Allowed origins come from `BACKEND_CORS_ORIGINS`. CORS is a browser policy, not 
 `X-Forwarded-For` is deliberately ignored, because a client-supplied header would let any caller mint a fresh limiter key. Running behind a reverse proxy therefore requires `--proxy-headers` plus an explicit trusted-proxy list before any forwarding header may be believed.
 
 Limiter state is in-process: with N worker processes the effective limit becomes N x limit, and a restart clears it. A shared store such as Redis is required before scaling beyond a single container.
+
+#### Geo enrichment
+
+Before storage the visitor's IP is resolved to a country and city through an ordered provider chain (`ip-api`, then `ipapi.co`). Enrichment is advisory:
+
+| Situation | Outcome |
+|---|---|
+| first provider answers | row stores country, city, and the answering provider name |
+| first fails or returns nothing usable | the next provider is tried |
+| every provider fails | row is stored with `NULL` geo columns |
+| unroutable address (loopback, private, documentation range) | no provider is called, geo stays `NULL` |
+
+A failure anywhere in enrichment — including inside the chain itself — can never prevent a submission from being stored. The answering provider is recorded in `geo_provider`, so a fallback is verifiable in stored data rather than merely claimed. Each provider has a bounded timeout (`GEO_PROVIDER_TIMEOUT_SECONDS`), so worst-case added latency is that timeout times the number of providers.
+
+There is no cache and no circuit breaker yet: a repeatedly failing provider is retried on every submission and pays its timeout each time.
 
 ## Reliability and security decisions
 

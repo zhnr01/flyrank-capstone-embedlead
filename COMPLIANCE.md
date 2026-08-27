@@ -40,7 +40,7 @@ Status values:
 |---|---|---|
 | Authenticated CRUD; unauthenticated rejected | DONE | `EVIDENCE.md` widget lifecycle; 401 without token. |
 | Tenant A cannot read or modify tenant B's widgets | DONE | Foreign GET/PATCH/DELETE all return 404. |
-| Tenant isolation for **submissions** | TODO | Submissions do not exist yet. |
+| Tenant isolation for **submissions** | DONE | `tenant_id` derived from the addressed widget row; verified in SQL that every submission's tenant matches its widget's tenant. |
 | Embed snippet generated per widget | TODO | — |
 
 ### Widget delivery
@@ -70,8 +70,8 @@ Status values:
 
 | Box | Status |
 |---|---|
-| Provider A down → provider B enriches | TODO |
-| All providers down → submission still succeeds without geo | TODO |
+| Provider A down → provider B enriches | DONE |
+| All providers down → submission still succeeds without geo | DONE |
 | Failing confirmation email/webhook does not prevent storage | TODO |
 
 ### Tests and documentation
@@ -89,7 +89,7 @@ Status values:
 | 1 | Valid submission from second-origin page → stored, 2xx, visible in dashboard | TODO |
 | 2 | Malformed and oversized payload → clean 4xx JSON, never 500 | DONE |
 | 3 | Burst → 429s appear, normal request right after still succeeds | DONE |
-| 4 | Geo A down → B enriches; both down → stored without geo | TODO |
+| 4 | Geo A down → B enriches; both down → stored without geo | DONE |
 | 5 | Email/webhook side effect throws → submission still succeeds and is stored | TODO |
 | 6 | Honeypot filled → submission silently dropped or rejected | DONE |
 

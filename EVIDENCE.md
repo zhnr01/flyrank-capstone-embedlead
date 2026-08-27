@@ -175,10 +175,46 @@ Known limitations, not yet closed:
 
 ## Enrichment and side effects
 
-- [ ] Provider A fails and provider B enriches — PENDING
-- [ ] Both providers fail and submission still commits — PENDING
+- [x] Provider A fails and provider B enriches
+- [x] Both providers fail and submission still commits
 - [ ] Notification fails and submission still commits — PENDING
 - [ ] Retried notification does not duplicate the durable intent — PENDING
+
+Runtime proof (migration head `0005_submission_geo`, backend healthy as uid=999(app)):
+
+```text
+real chain, both providers live
+  lookup 8.8.8.8 -> GeoLocation(country='US', city='Ashburn', provider='ip-api')
+
+simulated outage of provider A, real provider B live
+  log: geo provider dead-A failed, advancing chain
+  result -> GeoLocation(country='US', city='Ashburn', provider='ip-api')
+
+both providers dead
+  log: geo provider dead-A failed, advancing chain
+  log: geo provider dead-B failed, advancing chain
+  result -> None   (returned, not raised)
+
+private container address 172.18.0.1
+  result -> None   (no provider called, no upstream quota spent)
+
+end-to-end submission from a public client address
+  POST /api/v1/public/widgets/15/submissions -> 202 {"status":"accepted"}
+  SELECT id, email, geo_country, geo_city, geo_provider FROM submissions
+   12 | geo@example.com  | US | Ashburn | ip-api
+   11 | good@example.com |    |         |         <- rows predating the migration unaffected
+```
+
+A genuine third-party failure was observed during this proof rather than simulated: `ipapi.co` returned `429 Too Many Requests` on its free tier. The chain logged `geo provider ipapi-co failed, advancing chain` and degraded correctly with no test scaffolding involved.
+
+Deterministic coverage: twelve chain unit tests (first answer wins with later providers called zero times, raised failure advances, empty answer advances, all-fail returns `None`, unroutable and malformed addresses skip every provider) plus five endpoint tests, including a submission that survives a chain object which itself raises.
+
+Known limitations, not yet closed:
+
+- No caching: the same address submitting twice costs two upstream calls.
+- No circuit breaker: a dead provider stays in the chain and costs its full timeout on every request.
+- No retry inside a provider; one attempt, then advance.
+- Worst-case added latency is the per-provider timeout times the provider count, currently 1s x 2.
 
 ## Dashboard and documentation
 

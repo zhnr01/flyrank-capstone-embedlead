@@ -65,6 +65,9 @@ class SubmissionRecord(Base):
     email: Mapped[str] = mapped_column(String(320), nullable=False)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    geo_country: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    geo_city: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    geo_provider: Mapped[str | None] = mapped_column(String(30), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
