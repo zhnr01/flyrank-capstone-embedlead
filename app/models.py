@@ -1,4 +1,6 @@
-from sqlalchemy import BigInteger, ForeignKey, Index, String
+from datetime import datetime
+
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -47,3 +49,24 @@ class WidgetRecord(Base):
     )
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     kind: Mapped[str] = mapped_column(String(30), nullable=False)
+
+
+class SubmissionRecord(Base):
+    __tablename__ = "submissions"
+
+    __table_args__ = (Index("ix_submissions_tenant_id_id", "tenant_id", "id"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    widget_id: Mapped[int] = mapped_column(
+        ForeignKey("widgets.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )

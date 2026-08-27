@@ -17,6 +17,8 @@ class Settings(BaseSettings):
         min_length=32,
     )
     access_token_expire_minutes: int = Field(default=15, gt=0, le=1_440)
+    backend_cors_origins: list[str] = Field(default_factory=list)
+    max_submission_bytes: int = Field(default=8_192, gt=0, le=1_048_576)
     postgres_server: str = "localhost"
     postgres_port: int = 5432
     postgres_db: str = "embedlead"

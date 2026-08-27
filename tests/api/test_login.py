@@ -24,9 +24,9 @@ def teardown_function() -> None:
 def test_valid_credentials_return_bearer_token() -> None:
     install_users(
         {
-            "owner@example.test": User(
+            "owner@example.com": User(
                 id=7,
-                email="owner@example.test",
+                email="owner@example.com",
                 password_hash=get_password_hash("correct-password"),
             )
         }
@@ -34,7 +34,7 @@ def test_valid_credentials_return_bearer_token() -> None:
 
     response = client.post(
         "/api/v1/auth/token",
-        json={"email": "owner@example.test", "password": "correct-password"},
+        json={"email": "owner@example.com", "password": "correct-password"},
     )
 
     assert response.status_code == 200
@@ -45,9 +45,9 @@ def test_valid_credentials_return_bearer_token() -> None:
 def test_wrong_password_and_unknown_email_share_safe_401() -> None:
     install_users(
         {
-            "owner@example.test": User(
+            "owner@example.com": User(
                 id=7,
-                email="owner@example.test",
+                email="owner@example.com",
                 password_hash=get_password_hash("correct-password"),
             )
         }
@@ -55,11 +55,11 @@ def test_wrong_password_and_unknown_email_share_safe_401() -> None:
 
     wrong_password = client.post(
         "/api/v1/auth/token",
-        json={"email": "owner@example.test", "password": "wrong-password"},
+        json={"email": "owner@example.com", "password": "wrong-password"},
     )
     unknown_email = client.post(
         "/api/v1/auth/token",
-        json={"email": "unknown@example.test", "password": "wrong-password"},
+        json={"email": "unknown@example.com", "password": "wrong-password"},
     )
 
     assert wrong_password.status_code == 401
@@ -70,9 +70,9 @@ def test_wrong_password_and_unknown_email_share_safe_401() -> None:
 def test_login_normalizes_email_before_lookup() -> None:
     install_users(
         {
-            "owner@example.test": User(
+            "owner@example.com": User(
                 id=7,
-                email="owner@example.test",
+                email="owner@example.com",
                 password_hash=get_password_hash("correct-password"),
             )
         }
@@ -80,7 +80,7 @@ def test_login_normalizes_email_before_lookup() -> None:
 
     response = client.post(
         "/api/v1/auth/token",
-        json={"email": "  OWNER@EXAMPLE.TEST ", "password": "correct-password"},
+        json={"email": "  OWNER@EXAMPLE.COM ", "password": "correct-password"},
     )
 
     assert response.status_code == 200
@@ -89,9 +89,9 @@ def test_login_normalizes_email_before_lookup() -> None:
 def test_user_without_membership_cannot_receive_token() -> None:
     user_repository = InMemoryUserRepository(
         {
-            "orphan@example.test": User(
+            "orphan@example.com": User(
                 id=99,
-                email="orphan@example.test",
+                email="orphan@example.com",
                 password_hash=get_password_hash("correct-password"),
             )
         }
@@ -102,7 +102,7 @@ def test_user_without_membership_cannot_receive_token() -> None:
 
     response = client.post(
         "/api/v1/auth/token",
-        json={"email": "orphan@example.test", "password": "correct-password"},
+        json={"email": "orphan@example.com", "password": "correct-password"},
     )
 
     assert response.status_code == 403

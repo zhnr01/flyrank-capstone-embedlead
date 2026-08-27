@@ -17,6 +17,12 @@ class Widget:
 
 
 @dataclass(frozen=True)
+class WidgetOwnership:
+    id: int
+    tenant_id: int
+
+
+@dataclass(frozen=True)
 class WidgetPage:
     data: list[Widget]
     next_after_id: int | None
@@ -50,6 +56,8 @@ class WidgetRepository(Protocol):
     ) -> Widget | None: ...
 
     def delete_for_tenant(self, *, identity: Identity, widget_id: int) -> bool: ...
+
+    def get_ownership(self, *, widget_id: int) -> WidgetOwnership | None: ...
 
 
 class SqlAlchemyWidgetRepository:
@@ -141,6 +149,16 @@ class SqlAlchemyWidgetRepository:
             )
         )
 
+    def get_ownership(self, *, widget_id: int) -> WidgetOwnership | None:
+        row = self._session.execute(
+            select(WidgetRecord.id, WidgetRecord.tenant_id).where(
+                WidgetRecord.id == widget_id
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        return WidgetOwnership(id=row.id, tenant_id=row.tenant_id)
+
     @staticmethod
     def _to_widget(record: WidgetRecord) -> Widget:
         return Widget(id=record.id, name=record.name, kind=record.kind)
@@ -205,3 +223,9 @@ class InMemoryWidgetRepository:
 
     def delete_for_tenant(self, *, identity: Identity, widget_id: int) -> bool:
         return self._widgets.pop((identity.tenant_id, widget_id), None) is not None
+
+    def get_ownership(self, *, widget_id: int) -> WidgetOwnership | None:
+        for (tenant_id, stored_id) in self._widgets:
+            if stored_id == widget_id:
+                return WidgetOwnership(id=widget_id, tenant_id=tenant_id)
+        return None

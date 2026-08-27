@@ -55,7 +55,7 @@ owner-alpha GET /api/v1/widgets/1: 200
 owner-beta GET /api/v1/widgets/1: 404 {"detail":"Widget not found"}
 ```
 
-The identity registry remains a local test seam rather than production membership. Signed token creation and verification are now implemented; persistent users, login, and membership tables remain pending.
+The identity registry is no longer a test seam. Signed token creation and verification, persistent users, database-backed login, and membership authority are all implemented and proven in the sections below.
 
 ## Authentication foundation
 
@@ -88,8 +88,8 @@ The identity registry remains a local test seam rather than production membershi
 - [x] Authenticated widget create/read tracer
 - [x] Unauthenticated requests rejected
 - [x] Tenant A cannot read tenant B resources
-- [ ] Real user login, signed tokens, and persistent memberships — PENDING
-- [ ] Widget update/delete/list — PENDING
+- [x] Real user login, signed tokens, and persistent memberships — see "Authentication foundation" above
+- [x] Widget update/delete/list — see "Widget resource lifecycle" above
 - [ ] Embed snippet generated per widget — PENDING
 
 ## Widget delivery
@@ -100,10 +100,40 @@ The identity registry remains a local test seam rather than production membershi
 
 ## Public submission API
 
-- [ ] CORS preflight succeeds for an allowed origin — PENDING
-- [ ] Disallowed origin is not granted browser access — PENDING
-- [ ] Malformed and oversized payloads return clean 4xx JSON — PENDING
-- [ ] Valid submission is linked to the correct widget and tenant — PENDING
+- [x] CORS preflight succeeds for an allowed origin
+- [x] Disallowed origin is not granted browser access
+- [x] Malformed and oversized payloads return clean 4xx JSON
+- [x] Valid submission is linked to the correct widget and tenant
+
+Runtime proof (migration head `0004_submissions`, backend healthy as uid=999(app)):
+
+```text
+OPTIONS /api/v1/public/widgets/10/submissions   Origin: http://localhost:5500
+  200  Access-Control-Allow-Origin: http://localhost:5500
+       Access-Control-Allow-Methods: GET, POST, OPTIONS
+       Access-Control-Max-Age: 600
+
+OPTIONS /api/v1/public/widgets/10/submissions   Origin: http://evil.example
+  400  "Disallowed CORS origin"   (no Access-Control-Allow-Origin header)
+
+POST .../submissions  Origin: http://localhost:5500
+  202  {"status":"accepted"}      Access-Control-Allow-Origin: http://localhost:5500
+
+POST .../submissions  {"email":"nope","name":""}        -> 422 with JSON detail
+POST .../submissions  9 KB body                          -> 413 {"detail":"Submission payload too large"}
+POST .../submissions  {... ,"tenant_id":20}              -> 422 (extra field forbidden)
+POST /api/v1/public/widgets/987654/submissions           -> 404
+
+SELECT s.id, s.widget_id, s.tenant_id, w.tenant_id AS widget_tenant, (s.tenant_id = w.tenant_id)
+ id | widget_id | tenant_id | widget_tenant | tenant_matches
+  1 |         8 |        10 |            10 | t
+  2 |        10 |        10 |            10 | t
+  3 |        10 |        10 |            10 | t
+```
+
+Honest note: a POST from a disallowed origin still returns 202 and stores the row, with no allow-origin header. That is correct CORS semantics — the browser discards the response, but a non-browser client such as `curl` is unaffected. CORS is a browser policy, not authorization. Abuse protection for non-browser callers is the rate-limit and spam-control slice, not this one.
+
+Known limitation: the size guard reads the declared `Content-Length`. A streaming client that omits the header bypasses it. A middleware-level streaming cap is required to close this.
 
 ## Abuse protection
 

@@ -1,12 +1,25 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, system, widgets
+from app.api.routes import auth, public_submissions, system, widgets
 from app.core.config import settings
 
 app = FastAPI(
     title=settings.project_name,
     openapi_url="/api/v1/openapi.json",
 )
+
+if settings.backend_cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.backend_cors_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type"],
+        max_age=600,
+    )
+
 app.include_router(system.router, prefix="/api/v1/system", tags=["system"])
 app.include_router(widgets.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1")
+app.include_router(public_submissions.router, prefix="/api/v1")
