@@ -23,6 +23,7 @@ A backend capstone for serving embeddable lead-capture widgets and safely accept
 - Public cross-origin submission endpoint with CORS preflight, boundary validation, and a payload size guard.
 - Abuse protection: per-IP and per-widget sliding-window rate limits with `Retry-After`, plus a honeypot spam control.
 - Advisory IP geo enrichment with an ordered provider fallback chain that degrades to a stored row with no location.
+- Transactional outbox with a separate worker process: notifications are at-least-once, idempotent, and can never lose a lead.
 
 ## Why this system exists
 
@@ -313,6 +314,40 @@ Before storage the visitor's IP is resolved to a country and city through an ord
 A failure anywhere in enrichment — including inside the chain itself — can never prevent a submission from being stored. The answering provider is recorded in `geo_provider`, so a fallback is verifiable in stored data rather than merely claimed. Each provider has a bounded timeout (`GEO_PROVIDER_TIMEOUT_SECONDS`), so worst-case added latency is that timeout times the number of providers.
 
 There is no cache and no circuit breaker yet: a repeatedly failing provider is retried on every submission and pays its timeout each time.
+
+#### Notification side effect
+
+A submission must trigger a notification, but a mail or webhook failure must never lose a lead. The submission row and the delivery intent are written in one transaction:
+
+```text
+BEGIN
+  INSERT INTO submissions ...
+  INSERT INTO outbox_messages (status='pending', idempotency_key='submission:<id>:created')
+COMMIT
+```
+
+A separate worker process delivers them:
+
+```bash
+docker compose exec backend python -m app.worker --once   # drain one batch
+docker compose exec backend python -m app.worker          # poll continuously
+```
+
+| Situation | Outcome |
+|---|---|
+| delivery succeeds | `status='sent'`, attempts recorded |
+| delivery fails | attempt counted, row stays `pending`, retried on the next poll |
+| attempts exhausted (`OUTBOX_MAX_ATTEMPTS`) | `status='failed'` with `last_error`, a dead letter for inspection |
+| duplicate enqueue of the same key | no second row; the unique constraint makes it a no-op |
+| several workers running | `FOR UPDATE SKIP LOCKED` gives each a disjoint batch |
+
+Delivery is at-least-once, so the idempotency key is what makes repeats harmless. Inspect undelivered work with:
+
+```sql
+SELECT id, idempotency_key, attempts, last_error FROM outbox_messages WHERE status = 'failed';
+```
+
+The transport is currently a logging stand-in rather than real SMTP, so no credentials live in this repository; swapping it means adding one class that implements `NotificationTransport`. There is no exponential backoff, no alert on dead-letter rows, and the worker is not yet a supervised Compose service.
 
 ## Reliability and security decisions
 

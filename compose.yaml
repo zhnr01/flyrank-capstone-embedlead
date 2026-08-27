@@ -35,6 +35,8 @@ services:
       SUBMISSION_RATE_LIMIT_WINDOW_SECONDS: "60"
       GEO_ENRICHMENT_ENABLED: "true"
       GEO_PROVIDER_TIMEOUT_SECONDS: "1.0"
+      OUTBOX_MAX_ATTEMPTS: "3"
+      OUTBOX_POLL_SECONDS: "2.0"
     ports:
       - "8000:8000"
     healthcheck:

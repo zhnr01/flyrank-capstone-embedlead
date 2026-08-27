@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.membership_dependencies import get_membership_repository
+from app.api.outbox_dependencies import get_outbox_repository, get_unit_of_work
 from app.api.rate_limit_dependencies import reset_rate_limiters
 from app.api.submission_dependencies import get_submission_repository
 from app.api.widget_dependencies import get_widget_repository
@@ -13,6 +14,7 @@ from app.core.auth import create_access_token
 from app.core.config import settings
 from app.main import app
 from app.repositories.memberships import InMemoryMembershipRepository
+from app.repositories.outbox import InMemoryOutboxRepository
 from app.repositories.submissions import InMemorySubmissionRepository
 from app.repositories.widgets import InMemoryWidgetRepository
 
@@ -20,6 +22,11 @@ client = TestClient(app)
 ORIGIN = "http://localhost:5500"
 
 Repositories = tuple[InMemoryWidgetRepository, InMemorySubmissionRepository]
+
+
+class NoopUnitOfWork:
+    def commit(self) -> None:
+        return None
 
 
 @pytest.fixture(autouse=True)
@@ -30,6 +37,8 @@ def repositories() -> Generator[Repositories]:
     app.dependency_overrides[get_widget_repository] = lambda: widgets
     app.dependency_overrides[get_submission_repository] = lambda: submissions
     app.dependency_overrides[get_membership_repository] = lambda: memberships
+    app.dependency_overrides[get_outbox_repository] = lambda: InMemoryOutboxRepository()
+    app.dependency_overrides[get_unit_of_work] = lambda: NoopUnitOfWork()
     reset_rate_limiters()
     yield widgets, submissions
     app.dependency_overrides.clear()

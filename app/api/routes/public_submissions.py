@@ -3,6 +3,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.api.geo_dependencies import GeoChainDep
+from app.api.outbox_dependencies import OutboxRepositoryDep, UnitOfWorkDep
 from app.api.rate_limit_dependencies import (
     client_address,
     enforce_submission_rate_limits,
@@ -12,6 +13,7 @@ from app.api.schemas.submissions import SubmissionAccepted, SubmissionCreate
 from app.api.submission_dependencies import SubmissionRepositoryDep
 from app.api.widget_dependencies import WidgetRepositoryDep
 from app.core.geo import GeoLocation, GeoProviderChain
+from app.core.outbox import submission_created_key
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/public", tags=["public"])
@@ -43,6 +45,8 @@ def create_submission(
     request: Request,
     widgets: WidgetRepositoryDep,
     submissions: SubmissionRepositoryDep,
+    outbox: OutboxRepositoryDep,
+    unit_of_work: UnitOfWorkDep,
     geo_chain: GeoChainDep,
 ) -> SubmissionAccepted:
     ownership = widgets.get_ownership(widget_id=widget_id)
@@ -58,7 +62,7 @@ def create_submission(
 
     location = enrich_without_failing(geo_chain, client_address(request))
 
-    submissions.create(
+    submission = submissions.create(
         widget_id=ownership.id,
         tenant_id=ownership.tenant_id,
         email=str(payload.email),
@@ -66,4 +70,14 @@ def create_submission(
         message=payload.message,
         location=location,
     )
+    outbox.enqueue(
+        topic="submission.created",
+        idempotency_key=submission_created_key(submission.id),
+        payload={
+            "submission_id": submission.id,
+            "widget_id": submission.widget_id,
+            "tenant_id": submission.tenant_id,
+        },
+    )
+    unit_of_work.commit()
     return SubmissionAccepted()

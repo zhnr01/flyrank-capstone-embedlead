@@ -59,7 +59,7 @@ class SqlAlchemySubmissionRepository:
             geo_provider=location.provider if location else None,
         )
         self._session.add(record)
-        self._session.commit()
+        self._session.flush()
         self._session.refresh(record)
         return Submission(
             id=record.id,

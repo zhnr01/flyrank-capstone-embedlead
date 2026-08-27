@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.api.geo_dependencies import get_geo_chain
 from app.api.membership_dependencies import get_membership_repository
+from app.api.outbox_dependencies import get_outbox_repository, get_unit_of_work
 from app.api.rate_limit_dependencies import reset_rate_limiters
 from app.api.submission_dependencies import get_submission_repository
 from app.api.widget_dependencies import get_widget_repository
@@ -13,6 +14,7 @@ from app.core.auth import create_access_token
 from app.core.geo import GeoLocation, GeoProviderChain
 from app.main import app
 from app.repositories.memberships import InMemoryMembershipRepository
+from app.repositories.outbox import InMemoryOutboxRepository
 from app.repositories.submissions import InMemorySubmissionRepository
 from app.repositories.widgets import InMemoryWidgetRepository
 
@@ -47,6 +49,11 @@ class ExplodingChain(GeoProviderChain):
         raise RuntimeError("chain itself is broken")
 
 
+class NoopUnitOfWork:
+    def commit(self) -> None:
+        return None
+
+
 @pytest.fixture
 def submissions() -> Generator[InMemorySubmissionRepository]:
     widgets = InMemoryWidgetRepository()
@@ -55,6 +62,8 @@ def submissions() -> Generator[InMemorySubmissionRepository]:
     app.dependency_overrides[get_widget_repository] = lambda: widgets
     app.dependency_overrides[get_submission_repository] = lambda: store
     app.dependency_overrides[get_membership_repository] = lambda: memberships
+    app.dependency_overrides[get_outbox_repository] = lambda: InMemoryOutboxRepository()
+    app.dependency_overrides[get_unit_of_work] = lambda: NoopUnitOfWork()
     reset_rate_limiters()
     yield store
     app.dependency_overrides.clear()

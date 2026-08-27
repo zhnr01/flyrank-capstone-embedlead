@@ -177,10 +177,63 @@ Known limitations, not yet closed:
 
 - [x] Provider A fails and provider B enriches
 - [x] Both providers fail and submission still commits
-- [ ] Notification fails and submission still commits — PENDING
-- [ ] Retried notification does not duplicate the durable intent — PENDING
+- [x] Notification fails and submission still commits
+- [x] Retried notification does not duplicate the durable intent
 
-Runtime proof (migration head `0005_submission_geo`, backend healthy as uid=999(app)):
+### Safe side effect runtime proof
+
+Migration head `0006_outbox_messages`, backend healthy as uid=999(app).
+
+```text
+two submissions -> outbox rows created in the SAME transaction
+ id |       topic        |    idempotency_key    | status  | attempts
+  1 | submission.created | submission:13:created | pending |        0
+  2 | submission.created | submission:14:created | pending |        0
+
+worker run (python -m app.worker --once)
+  notification delivered key=submission:13:created
+  notification delivered key=submission:14:created
+  outbox batch delivered=2
+ id |    idempotency_key    | status | attempts | last_error
+  1 | submission:13:created | sent   |        1 |
+  2 | submission:14:created | sent   |        1 |
+
+duplicate enqueue of an existing key -> returned None, no second row
+  (unique constraint uq_outbox_messages_idempotency is authoritative)
+
+dead transport, max_attempts=3, worker run four times
+  outbox delivery failed key=submission:999:created attempts=1 exhausted=False
+  outbox delivery failed key=submission:999:created attempts=2 exhausted=False
+  outbox delivery failed key=submission:999:created attempts=3 exhausted=True
+  (fourth run made no further attempt)
+ id |    idempotency_key     | status | attempts |                last_error
+  3 | submission:999:created | failed |        3 | ConnectionError: mail server unreachable
+
+submissions table after every transport failure
+  count = 14      -> no lead was lost by a failing notification
+
+concurrent claim with FOR UPDATE SKIP LOCKED
+  worker A claimed: ['concurrency:0', 'concurrency:1']
+  worker B claimed: ['concurrency:2', 'concurrency:3']
+  overlap: set()   -> no double delivery across workers
+
+\d outbox_messages
+  "ix_outbox_messages_status_id"   btree (status, id)
+  "uq_outbox_messages_idempotency" UNIQUE CONSTRAINT, btree (idempotency_key)
+```
+
+Deterministic coverage: nine outbox unit tests and five endpoint tests, including a submission that survives a transport which always raises, and a worker run twice that delivers only once.
+
+Known limitations, not yet closed:
+
+- Retry has no backoff or jitter; a failing message is retried on the next poll.
+- The transport is a logging stand-in, not real SMTP or a webhook. Swapping it is a new class implementing `NotificationTransport`.
+- Dead-letter rows require manual inspection; there is no alert or automatic replay.
+- The worker runs as a separate manual process rather than a supervised Compose service.
+
+### Geo enrichment runtime proof
+
+Migration head at the time of this proof: `0005_submission_geo`, backend healthy as uid=999(app).
 
 ```text
 real chain, both providers live

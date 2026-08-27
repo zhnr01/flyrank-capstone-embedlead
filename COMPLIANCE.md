@@ -29,7 +29,7 @@ Status values:
 | 2 | Embed snippet generation | TODO | Per-widget `<script>` line not yet returned. |
 | 3 | Fast cached widget delivery | TODO | No config endpoint, no versioned bundle, no cache headers. |
 | 4 | Public submission endpoint | DONE | CORS + preflight, boundary validation, 413 guard, tenant-linked storage, all proven. |
-| 5 | Protection, enrichment, safe side effects | PARTIAL | Rate limiting and honeypot done and proven; geo chain and safe side effect still TODO. |
+| 5 | Protection, enrichment, safe side effects | DONE | Rate limiting, honeypot, geo fallback chain, and transactional-outbox side effect all proven. |
 | 6 | Owner dashboard API | TODO | No submission list or analytics. |
 
 ## Section 6 — definition of done
@@ -72,7 +72,7 @@ Status values:
 |---|---|
 | Provider A down → provider B enriches | DONE |
 | All providers down → submission still succeeds without geo | DONE |
-| Failing confirmation email/webhook does not prevent storage | TODO |
+| Failing confirmation email/webhook does not prevent storage | DONE |
 
 ### Tests and documentation
 
@@ -90,7 +90,7 @@ Status values:
 | 2 | Malformed and oversized payload → clean 4xx JSON, never 500 | DONE |
 | 3 | Burst → 429s appear, normal request right after still succeeds | DONE |
 | 4 | Geo A down → B enriches; both down → stored without geo | DONE |
-| 5 | Email/webhook side effect throws → submission still succeeds and is stored | TODO |
+| 5 | Email/webhook side effect throws → submission still succeeds and is stored | DONE |
 | 6 | Honeypot filled → submission silently dropped or rejected | DONE |
 
 ## Section 12 — eight shared requirements
@@ -98,10 +98,10 @@ Status values:
 | # | Requirement | Status | Note |
 |---|---|---|---|
 | 1 | Layered architecture (data / logic / HTTP separated) | DONE | Routes, repositories, core, models are distinct; core auth holds no HTTP or storage wiring. |
-| 2 | Validation at the boundary → clean 4xx, never 500 | PARTIAL | Proven on owner routes; public path pending. |
-| 3 | ≥1 background job, off the request path, retries + failure alert | TODO | Largest unstarted requirement. Needed for the email/webhook side effect. |
-| 4 | Real persistence: migrations, right indexes, isolated tenants | DONE | Three Alembic migrations; composite indexes; tenant predicates in SQL. |
-| 5 | Idempotency where it matters — retried action happens once | TODO | Needed so a retried submission or notification does not duplicate. |
+| 2 | Validation at the boundary → clean 4xx, never 500 | DONE | Owner and public paths both return 4xx JSON for malformed, oversized, unknown-field, and unknown-resource cases. |
+| 3 | ≥1 background job, off the request path, retries + failure alert | DONE | Transactional outbox plus `python -m app.worker`; bounded attempts, dead-letter status with `last_error` recorded. |
+| 4 | Real persistence: migrations, right indexes, isolated tenants | DONE | Six Alembic migrations; composite indexes; tenant predicates in SQL. |
+| 5 | Idempotency where it matters — retried action happens once | DONE | Derived idempotency key with a database unique constraint; duplicate enqueue is a no-op, proven at runtime. |
 | 6 | Secrets clean — env only, never logged | DONE | `.env` ignored, `.env.example` placeholders, production rejects the development key. |
 | 7 | Cost tracked if AI is used | N/A | No AI feature in this system. |
 | 8 | Tests that matter — the scary cases, deterministic | PARTIAL | Auth/tenant/CORS/oversized/abuse cases covered with an injected clock; dependency-failure cases pending. |
