@@ -5,7 +5,7 @@ from typing import Protocol
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.auth import Identity
+from app.core.identity import Identity
 from app.models import WidgetRecord
 
 

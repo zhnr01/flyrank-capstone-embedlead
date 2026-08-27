@@ -15,8 +15,9 @@ A backend capstone for serving embeddable lead-capture widgets and safely accept
 - Backend container running as an unprivileged user.
 - Automated API and failure-path tests, Ruff linting, and strict mypy checks.
 - Tenant-scoped widget create/read endpoints backed by a PostgreSQL migration.
-- A local demo-identity seam proving authorization behavior before real login exists.
+- A signed-authentication foundation proving authorization behavior before a login endpoint exists.
 - Argon2 password hashing and signed, expiring access-token verification.
+- Persistent tenant, user, and membership authority tables.
 
 ## Why this system exists
 
@@ -199,7 +200,7 @@ Response: HTTP `201`
 {"id":1,"name":"Contact form","kind":"contact"}
 ```
 
-The server verifies token signature, algorithm, expiry, and subject before resolving tenant scope from a temporary server-owned identity mapping. The request body cannot choose `tenant_id`.
+The server verifies token signature, algorithm, expiry, and subject before resolving tenant scope from a PostgreSQL membership row. The request body cannot choose `tenant_id`.
 
 ### `GET /api/v1/widgets/{id}`
 
@@ -243,7 +244,7 @@ Reproducible command output and pending acceptance criteria are tracked in [`EVI
 
 The next vertical slices are:
 
-1. Real users, signed authentication, memberships, and complete tenant-isolated widget CRUD.
+1. Login/user lifecycle and complete tenant-isolated widget CRUD.
 2. Public submission with validation and cross-origin behavior.
 3. Payload limits, per-IP/per-widget rate limits, and honeypot spam control.
 4. Geo-provider fallback with graceful degradation.

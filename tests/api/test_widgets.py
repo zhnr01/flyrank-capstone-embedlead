@@ -4,9 +4,11 @@ from datetime import timedelta
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.membership_dependencies import get_membership_repository
 from app.api.widget_dependencies import get_widget_repository
 from app.core.auth import create_access_token
 from app.main import app
+from app.repositories.memberships import InMemoryMembershipRepository
 from app.repositories.widgets import InMemoryWidgetRepository, WidgetRepository
 
 client = TestClient(app)
@@ -20,7 +22,9 @@ def auth_headers(user_id: int) -> dict[str, str]:
 @pytest.fixture(autouse=True)
 def widget_repository() -> Generator[WidgetRepository]:
     repository = InMemoryWidgetRepository()
+    membership_repository = InMemoryMembershipRepository({7: 10, 8: 20})
     app.dependency_overrides[get_widget_repository] = lambda: repository
+    app.dependency_overrides[get_membership_repository] = lambda: membership_repository
     yield repository
     app.dependency_overrides.clear()
 
@@ -97,6 +101,17 @@ def test_unsigned_demo_credential_is_rejected() -> None:
     )
 
     assert response.status_code == 401
+
+
+def test_authenticated_user_without_membership_is_forbidden() -> None:
+    response = client.post(
+        "/api/v1/widgets",
+        headers=auth_headers(999),
+        json={"name": "No tenant", "kind": "contact"},
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Tenant membership required"}
 
 
 def test_create_widget_rejects_unsupported_kind() -> None:

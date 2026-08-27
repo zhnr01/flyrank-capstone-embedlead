@@ -3,9 +3,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 from fastapi.exceptions import HTTPException
 
+from app.api.auth_dependencies import get_current_identity
 from app.api.schemas.widgets import WidgetCreate, WidgetResponse
 from app.api.widget_dependencies import get_widget_repository
-from app.core.auth import Identity, get_current_identity
+from app.core.identity import Identity
 from app.repositories.widgets import WidgetRepository
 
 router = APIRouter(prefix="/widgets", tags=["widgets"])

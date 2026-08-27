@@ -64,8 +64,12 @@ The identity registry remains a local test seam rather than production membershi
 - [x] Tampered and expired tokens are rejected.
 - [x] Protected widget routes accept signed token subjects and reject the earlier unsigned demo credential format.
 - [x] Runtime proof: a signed token created a widget with HTTP 201; the old unsigned demo credential returned HTTP 401; the token was not printed.
-- [x] Full suite: 17 tests passed; Ruff and strict mypy passed.
-- [ ] Persistent users, login endpoint, tenants, and memberships — PENDING
+- [x] Full suite: 20 tests passed; Ruff and strict mypy passed.
+- [x] Persistent membership runtime proof: signed user without membership returned 403; after server-side membership fixtures were inserted, the same user created a widget with 201; another member received 404 for that widget.
+- [x] Migration head at runtime: `0002_memberships`; backend remained healthy as uid=999(app).
+- [x] Persistent users, tenants, and membership authority schema
+- [x] Server-side membership lookup for signed token subjects
+- [ ] Login endpoint and user lifecycle — PENDING
 
 ## Widget management
 

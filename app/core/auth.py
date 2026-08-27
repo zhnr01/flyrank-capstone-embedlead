@@ -1,35 +1,14 @@
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
 
 import jwt
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt.exceptions import InvalidTokenError
 from pwdlib import PasswordHash
 from pwdlib.hashers.argon2 import Argon2Hasher
 
 from app.core.config import settings
 
-bearer_scheme = HTTPBearer(auto_error=False)
 password_hash = PasswordHash((Argon2Hasher(),))
 ALGORITHM = "HS256"
-BearerCredentials = Annotated[
-    HTTPAuthorizationCredentials | None,
-    Depends(bearer_scheme),
-]
-
-
-@dataclass(frozen=True)
-class Identity:
-    user_id: int
-    tenant_id: int
-
-
-demo_identities = {
-    "owner-alpha": Identity(user_id=7, tenant_id=10),
-    "owner-beta": Identity(user_id=8, tenant_id=20),
-}
 
 
 def get_password_hash(password: str) -> str:
@@ -57,36 +36,3 @@ def verify_access_token(token: str) -> str:
     if not isinstance(subject, str) or not subject:
         raise InvalidTokenError("token subject is invalid")
     return subject
-
-
-def get_current_identity(
-    credentials: BearerCredentials,
-) -> Identity:
-    if credentials is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
-        )
-
-    try:
-        subject = verify_access_token(credentials.credentials)
-        user_id = int(subject.removeprefix("user-"))
-    except (InvalidTokenError, ValueError):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-        ) from None
-    identity = next(
-        (
-            candidate
-            for candidate in demo_identities.values()
-            if candidate.user_id == user_id
-        ),
-        None,
-    )
-    if identity is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-        )
-    return identity
