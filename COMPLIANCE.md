@@ -104,7 +104,7 @@ Status values:
 | 5 | Idempotency where it matters — retried action happens once | DONE | Derived idempotency key with a database unique constraint; duplicate enqueue is a no-op, proven at runtime. |
 | 6 | Secrets clean — env only, never logged | DONE | `.env` ignored, `.env.example` placeholders, production rejects the development key. Webhook secret signs via HMAC and is never transmitted or logged, asserted by test. |
 | 7 | Cost tracked if AI is used | N/A | No AI feature in this system. |
-| 8 | Tests that matter — the scary cases, deterministic | DONE | 137 tests: auth, tenant isolation, CORS, oversized, abuse with an injected clock, provider failure, real webhook failure, caching/304, dashboard scoping, metrics auth and cardinality bounds. Determinism verified by repeated full-suite runs, not assumed. |
+| 8 | Tests that matter — the scary cases, deterministic | DONE | 150 tests: auth, tenant isolation, CORS, oversized, abuse with an injected clock, provider failure, real webhook failure, caching/304, dashboard scoping, metrics auth and cardinality bounds. Determinism verified by repeated full-suite runs, not assumed. |
 
 ## Observability (shared requirement: operators can see it working)
 
@@ -121,6 +121,8 @@ Status values:
 
 | Defect | Impact | Status |
 |---|---|---|
+| Payload size guard bypassable by omitting `Content-Length`; a route dependency also runs after FastAPI has already buffered the body | Remote unauthenticated memory pressure; a 610x oversized body was accepted and stored | FIXED — `BodySizeLimitMiddleware` bounds bytes as they stream; runtime proof in `EVIDENCE.md` |
+| `SqlAlchemyOutboxRepository.enqueue` called `session.rollback()` on a duplicate idempotency key, discarding the uncommitted submission sharing that session | **Silent data loss** — API returned `202 Accepted` and the lead was never stored | FIXED — SAVEPOINT isolates the duplicate insert; RED/GREEN + runtime proof in `EVIDENCE.md` |
 | `BACKEND_CORS_ORIGINS` declared in `.env.example` with no settings field and no middleware, silently discarded by `extra="ignore"` | Implied a security control that did not exist | Fixed — settings field + `CORSMiddleware` added, proven by preflight transcript |
 | Compose passed no `BACKEND_CORS_ORIGINS`, so CORS was absent in the container even though tests passed via `conftest.py` | Tests green while the shipped artifact had no CORS at all — caught only by runtime proof | Fixed — compose now sets the variable; re-verified in-container |
 | Test fixtures used the reserved `.test` TLD, which `email-validator` rejects | Tests would fail for the wrong reason | Fixed — fixtures use `example.com` |

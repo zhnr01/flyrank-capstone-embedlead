@@ -63,12 +63,14 @@ class SqlAlchemyOutboxRepository:
             status="pending",
             attempts=0,
         )
-        self._session.add(record)
+        savepoint = self._session.begin_nested()
         try:
+            self._session.add(record)
             self._session.flush()
         except IntegrityError:
-            self._session.rollback()
+            savepoint.rollback()
             return None
+        savepoint.commit()
         return to_message(record)
 
     def claim_pending(self, *, limit: int) -> list[OutboxMessage]:

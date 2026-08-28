@@ -307,3 +307,84 @@ been expected to appear at least once in that many runs.
 - Why a flaky security test is more dangerous than a failing one.
 - Why mutating the payload is both deterministic and a better test than mutating the signature.
 - Why `alg: none` must be rejected, and why an algorithm allowlist is the defence.
+
+## Session 7 — Unit 0: two Critical defects the green suite could not see
+
+### What happened
+
+The user pointed out that constants were scattered across files and said, correctly, that a
+senior reviewer would find more. Rather than fix only what was named, I installed the full
+skill library from six repositories, built the agent harness, and ran a three-way delegated
+audit (naming/literals, layering/Protocol drift, security/abuse coverage).
+
+The audit found two **Critical** defects that 137 passing tests had never touched.
+
+### Concept learned
+
+**A fake that cannot fail teaches you nothing.** Both bugs lived in the gap between a Protocol's
+two implementations. `InMemoryOutboxRepository.enqueue` returns `None` on a duplicate and leaves
+its list intact — there is no shared transaction, so there is nothing to roll back. The SQL
+implementation shared one `Session` with every other repository in the request, so its
+`rollback()` destroyed an unrelated, uncommitted `SubmissionRecord`. The fake was structurally
+incapable of exhibiting the bug.
+
+**A route dependency cannot bound a request body.** FastAPI buffers the entire body at
+`fastapi/routing.py:433`, then solves dependencies at `:481`. Any size check expressed as a
+dependency runs *after* the memory has already been consumed. Bounding bytes requires ASGI
+middleware that inspects `receive()` messages as they stream.
+
+### Mistakes and corrections
+
+**I trusted a subagent's exploit and it was wrong.** The report claimed a chunked 5MB body
+returned 202. My probe returned 422 — Pydantic's `max_length` on `message` rejected it first.
+The *conclusion* was right but the payload was wrong. The real exploit pads whitespace outside
+the JSON fields so every field validator passes and only total body size is abnormal. Had I
+pasted the subagent's claim as evidence, the write-up would have contained a fabricated
+transcript.
+
+**My first middleware raised an exception from `receive()`.** That surfaces as a 500, not a 413
+— turning a clean rejection into an unhandled error. Corrected to signal `http.disconnect` and
+send a proper 413.
+
+**My first savepoint fix opened the SAVEPOINT after `session.add()`.** The pending record then
+survived the rollback and the `IntegrityError` resurfaced at the outer commit. The savepoint
+must be opened *before* the `add` so the rollback discards the pending state too.
+
+**My test fixture dropped every table in the shared dev database.** `Base.metadata.drop_all`
+against the same volume the container uses left `alembic_version` stamped at head with no
+tables, so `alembic upgrade head` was a no-op and the seed failed on a missing relation.
+Recovery required clearing the stamp and replaying the chain. Cost: about ten minutes. The
+accidental benefit was a genuine end-to-end migration replay proof.
+
+**I planned the wrong unit first.** After the audit surfaced two data-integrity bugs I started
+on the naming fixes that were already written in the spec. A silent data-loss bug outranks every
+tidy constant. Corrected by inserting Unit 0 ahead of Unit 1 in `docs/specs.md` before writing
+code.
+
+### Decisions
+
+**SAVEPOINT, not a second session.** A separate session for the outbox would break the
+transactional-outbox guarantee: the intent must commit atomically with the lead. A nested
+transaction keeps one atomic unit while isolating the one insert allowed to fail.
+
+**Publish the database port on `127.0.0.1` only.** `JSONB` and `SAVEPOINT` are engine-specific,
+so the regression test needs real PostgreSQL. Binding to loopback rather than `0.0.0.0` keeps
+the port off the network.
+
+**Skip, do not substitute.** When PostgreSQL is unreachable the test skips with a stated reason.
+A SQLite fallback would have passed while proving nothing — the same class of failure as the
+in-memory fake that hid the bug.
+
+**Delete `app/api/request_limits.py` outright.** Keeping it alongside the middleware would leave
+two mechanisms for one job, and the weaker one implies a protection it cannot deliver.
+
+### Verification
+
+```text
+uv run pytest        150 passed   (137 + 9 body-limit + 4 transaction)
+uv run ruff check .  All checks passed!
+uv run mypy          Success: no issues found in 79 source files
+runtime proof        UNIT 0: ALL RUNTIME CHECKS PASSED
+```
+
+Full transcripts in `EVIDENCE.md`.

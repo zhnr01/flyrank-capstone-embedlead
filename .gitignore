@@ -50,3 +50,4 @@ dist/
 .DS_Store
 /scripts/verify_harness.sh
 /docs/skills.md
+/scripts/

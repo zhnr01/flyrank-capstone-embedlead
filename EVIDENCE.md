@@ -573,3 +573,122 @@ uv run ruff check .   -> All checks passed!
 uv run mypy           -> Success: no issues found in 77 source files
 uv run pytest         -> 137 passed
 ```
+
+## Unit 0 — two Critical defects found by audit
+
+Both were found by a delegated review pass, then independently reproduced with runtime probes
+before any code changed. Neither was visible to the 137-test suite that was green at the time.
+
+### 0A — payload size guard was bypassable
+
+Before (the guard as shipped, `app/api/request_limits.py`):
+
+```text
+5,000,068-byte body, Transfer-Encoding: chunked, no Content-Length
+  -> 202 Accepted, row persisted   (610x the 8192-byte cap)
+identical body WITH Content-Length
+  -> 413 Content Too Large
+```
+
+Two distinct causes. The guard returned early when `content-length` was absent, and a route
+dependency cannot bound a body at all: FastAPI buffers the whole request at
+`fastapi/routing.py:433` before solving dependencies at `:481`.
+
+Note the first exploit attempt failed with 422 because Pydantic's `max_length` caught the
+oversized `message` field first. The working exploit pads with whitespace *outside* the JSON
+fields, so every field validator passes and only total body size is abnormal.
+
+After (`BodySizeLimitMiddleware`, pure ASGI, counts bytes as they stream):
+
+```text
+### 0A - the exploit that previously returned 202 and stored a 5MB row
+  body = 4997181 bytes, 610x the 8192-byte cap
+  no Content-Length is sent: httpx streams it chunked
+  -> HTTP 413
+  -> rows 0 -> 0
+  VERDICT: FIXED - rejected and nothing stored
+
+### 0A control - a legitimate submission must still work
+  -> HTTP 202, rows matching legit@example.com = 1
+  VERDICT: OK - normal traffic unaffected
+```
+
+### 0B — a duplicate idempotency key silently destroyed the lead
+
+Before:
+
+```text
+pre-insert the key the next submission will derive, then submit a real lead
+  -> HTTP 202 {"status":"accepted"}
+  -> rows matching lostlead@example.com: 0
+```
+
+The caller was told the lead was accepted. It was not stored. Cause: one `Session` per request
+(`app/api/deps.py:10`) shared by every repository; `SqlAlchemySubmissionRepository.create` only
+flushes; `SqlAlchemyOutboxRepository.enqueue` called `session.rollback()` on `IntegrityError`,
+discarding the uncommitted submission. The route then committed an empty transaction.
+
+The in-memory fake returns `None` and leaves its list intact, so no test using it could ever
+observe this. That is Protocol drift hiding a real bug behind green tests.
+
+After (SAVEPOINT via `session.begin_nested()`, so only the duplicate insert unwinds):
+
+```text
+### 0B - duplicate idempotency key must NOT destroy the lead
+  next submission id = 2, pre-inserting key submission:2:created
+  -> HTTP 202
+  -> rows matching survivor@example.com = 1
+  -> outbox rows for that key = 1 (must stay 1)
+  VERDICT: FIXED - lead survived the duplicate
+
+### session still usable after the duplicate
+  -> HTTP 202, rows = 1
+  VERDICT: OK
+```
+
+### Regression tests added
+
+`tests/test_outbox_transaction.py` runs against real PostgreSQL, not SQLite — `JSONB` and
+`SAVEPOINT` are both engine-specific, and a SQLite substitute would have proved nothing. It
+skips with a clear reason when the database is unreachable rather than passing vacuously.
+
+RED before the fix, on the real engine:
+
+```text
+>       assert len(stored_emails(session)) == 1
+E       assert 0 == 1
+E        +  where 0 = len([])
+FAILED tests/test_outbox_transaction.py::test_duplicate_key_does_not_destroy_the_uncommitted_submission
+FAILED tests/test_outbox_transaction.py::test_duplicate_key_leaves_exactly_one_outbox_row
+FAILED tests/test_outbox_transaction.py::test_session_stays_usable_after_a_duplicate
+FAILED tests/test_outbox_transaction.py::test_both_implementations_agree_on_duplicate_enqueue
+4 failed in 3.17s
+```
+
+GREEN after:
+
+```text
+4 passed in 2.27s
+```
+
+### Migration safety, proven accidentally
+
+The Unit 0 test fixture dropped every table while `alembic_version` remained stamped at head.
+Recovery replayed the full migration chain from scratch:
+
+```text
+Running upgrade 0003_widget_list_index -> 0004_submissions, create submissions table
+Running upgrade 0004_submissions -> 0005_submission_geo, add geo enrichment columns
+Running upgrade 0005_submission_geo -> 0006_outbox_messages, create outbox messages table
+```
+
+All six tables rebuilt, seed succeeded. The migration chain is replayable end to end on an
+empty database, not only incrementally.
+
+### Gates
+
+```text
+uv run pytest        150 passed
+uv run ruff check .  All checks passed!
+uv run mypy          Success: no issues found in 79 source files
+```

@@ -8,7 +8,6 @@ from app.api.rate_limit_dependencies import (
     client_address,
     enforce_submission_rate_limits,
 )
-from app.api.request_limits import enforce_submission_size_limit
 from app.api.schemas.submissions import SubmissionAccepted, SubmissionCreate
 from app.api.submission_dependencies import SubmissionRepositoryDep
 from app.api.widget_dependencies import WidgetRepositoryDep
@@ -37,7 +36,6 @@ def enrich_without_failing(
     response_model=SubmissionAccepted,
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[
-        Depends(enforce_submission_size_limit),
         Depends(enforce_submission_rate_limits),
     ],
 )

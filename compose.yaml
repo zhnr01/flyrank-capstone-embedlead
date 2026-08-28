@@ -11,6 +11,8 @@ services:
       interval: 2s
       timeout: 3s
       retries: 15
+    ports:
+      - "127.0.0.1:5432:5432"
     volumes:
       - embedlead-db-data:/var/lib/postgresql
 

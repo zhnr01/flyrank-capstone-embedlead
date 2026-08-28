@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.body_limit import BodySizeLimitMiddleware
 from app.api.request_context import RequestContextMiddleware
 from app.api.routes import (
     auth,
@@ -21,6 +22,11 @@ app = FastAPI(
 )
 
 app.add_middleware(RequestContextMiddleware)
+
+app.add_middleware(
+    BodySizeLimitMiddleware,
+    max_bytes=settings.max_submission_bytes,
+)
 
 if settings.backend_cors_origins:
     app.add_middleware(
