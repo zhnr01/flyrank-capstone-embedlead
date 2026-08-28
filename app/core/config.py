@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     redis_health_check_interval_seconds: int = Field(default=30, ge=0, le=600)
     redis_health_timeout_seconds: float = Field(default=1.0, gt=0, le=10)
     geo_enrichment_enabled: bool = True
+    geo_provider_a_enabled: bool = True
+    geo_provider_b_enabled: bool = True
     geo_provider_timeout_seconds: float = Field(default=1.0, gt=0, le=10)
     outbox_max_attempts: int = Field(default=3, gt=0, le=20)
     outbox_batch_size: int = Field(default=20, gt=0, le=500)

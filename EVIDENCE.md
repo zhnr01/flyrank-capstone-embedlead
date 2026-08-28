@@ -1201,3 +1201,126 @@ uv run pytest        245 passed
 uv run ruff check .  All checks passed!
 uv run mypy          Success: no issues found in 97 source files
 ```
+
+## Final review — findings I verified directly
+
+Before the delegated audits landed I ran the checks I could verify myself. Recorded here because
+three of them were real defects, not documentation nits.
+
+### 1. Three env vars documented but silently ignored
+
+`.env.example` advertised `GEO_PROVIDER_A_ENABLED`, `GEO_PROVIDER_B_ENABLED` and
+`NOTIFICATIONS_ENABLED`. None had a `Settings` field, and `model_config` sets `extra="ignore"`, so
+pydantic discarded them without complaint:
+
+```text
+$ for v in $(grep -oE '^[A-Z_]+=' .env.example | tr -d '='); do ... done
+  ORPHAN in .env.example: GEO_PROVIDER_A_ENABLED
+  ORPHAN in .env.example: GEO_PROVIDER_B_ENABLED
+  ORPHAN in .env.example: NOTIFICATIONS_ENABLED
+
+$ grep -rn 'geo_provider_a_enabled|notifications_enabled' app/ tests/
+  (zero reads)
+```
+
+An operator setting `NOTIFICATIONS_ENABLED=false` would still get notifications. This is the exact
+failure `COMPLIANCE.md` already records for `BACKEND_CORS_ORIGINS` — the same class recurred in a
+different file.
+
+The fix differs per variable, which is why they needed separating rather than bulk-adding fields:
+
+- `NOTIFICATIONS_ENABLED` was **redundant**. `notification_webhook_url` already gates delivery
+  (`app/services/notifications.py:75`), so an empty URL is the off switch. Deleted from
+  `.env.example` rather than given a second, competing control.
+- The two geo toggles were **genuinely missing**. `build_geo_chain` hardcoded both providers, so
+  there was no way to disable one — and Unit 4's rehearsal has to kill provider A live to show the
+  fallback chain. Wired to real `Settings` fields, RED test first, and added to `compose.yaml` so
+  the container exposes them too.
+
+```text
+$ uv run pytest tests/test_geo_toggles.py
+5 passed
+```
+
+The master switch still wins over both toggles, which is asserted rather than assumed.
+
+`GeoProviderChain` needed a public `providers` property for the test to read; asserting against
+`_providers` would have coupled the test to a private attribute.
+
+### 2. CORS was documented as if it protected the endpoint
+
+Verified against the running container:
+
+```text
+$ curl -X POST .../widgets/1/submissions -H 'Origin: http://evil.example' -d '...'
+status=202
+
+$ curl -X OPTIONS ... -H 'Origin: http://evil.example'      # allow-origin headers: 0
+$ curl -X OPTIONS ... -H 'Origin: http://localhost:5500'    # allow-origin headers: 1
+```
+
+So CORS behaves correctly — a browser on a disallowed origin cannot read the response — but `curl`
+still posts successfully, because CORS is a browser contract and nothing in the application checks
+`Origin`. `grep -rn 'Origin' app/api/ app/core/` returns nothing.
+
+This is **not** a vulnerability: an embeddable widget must accept posts from whatever site the
+tenant installed it on, and the brief requires cross-origin submissions to work. The real defences
+are origin-independent — the shared rate limiter, the ASGI body-size guard, config-driven
+validation, and the honeypot. The existing test is honestly named
+(`test_disallowed_origin_is_not_granted_browser_access`) and only asserts the header.
+
+The defect was documentation: the README never said any of this. Now stated plainly, including that
+per-widget origin allow-listing is not implemented.
+
+### 3. The README described behaviour that no longer existed
+
+Four separate drifts, all introduced by the Unit 3 commit:
+
+| Stale claim | Reality |
+|---|---|
+| "Rate-limit counters and the metrics registry both live in the process… N x limit" | Redis-backed via `limits`; shared budget proven |
+| "The snapshot is JSON… not an OpenMetrics text endpoint" | `text/plain; version=1.0.0`, cumulative buckets |
+| "bounded by `METRICS_MAX_SERIES`" | that field was **deleted**; the real one is `METRICS_MAX_ROUTES` |
+| A 20-line JSON response example with `p50_seconds`, `buckets`, `cardinality` | the endpoint returns exposition text |
+| "Limiter state is in-process… Redis is required before scaling" (line 340, separate wording) | Redis is wired |
+
+The JSON example was the worst of these: a reviewer copying it would find nothing resembling it.
+Replaced with output captured from the running container, which also demonstrates the two claims the
+surrounding prose makes — route templates rather than concrete paths, and `le="+Inf"` equal to
+`_count` (both 131.0).
+
+### 4. The harness let it happen, so the harness changed
+
+Doc/code drift was not one of the 15 enforced lanes, which is precisely why four false claims
+survived a commit that ran every gate. `scripts/verify_harness.sh` now enforces three
+documentation-accuracy checks:
+
+- every env var in `.env.example` and `compose.yaml` maps to a real `Settings` field;
+- no doc names a setting that has been deleted;
+- the README does not assert in-process rate limiting while `redis_url` exists, nor JSON metrics
+  while `prometheus_client` is wired.
+
+All three fired on the first run. Mutation-tested afterwards by reintroducing the stale sentence:
+
+```text
+STALE README: claims in-process rate limiting while redis_url exists
+HARNESS FAILED
+--- restored ---
+HARNESS VERIFIED
+```
+
+The first version of the guard only matched the exact phrasing I had just fixed, which would have
+been theatre; it now also catches the differently-worded claim found at line 340.
+
+### Clean on first inspection
+
+Worth recording so the review is not only a list of faults:
+
+```text
+comments/docstrings in app/ or tests/   0
+type: ignore / cast() / noqa            0
+.env tracked by git                     0 (and .gitignore excludes it)
+f-string or concatenated SQL            0
+innerHTML in the embedded bundle        0 (textContent only)
+JWT algorithms=[HS256]                  pinned, so alg-confusion and alg:none both fail
+```

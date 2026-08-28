@@ -115,7 +115,7 @@ Status values:
 | Sensitive values never logged | DONE | Redaction set covers password, secret, token, authorization, signature, email, api_key; container `grep` for the operator token and the lead email both return 0. |
 | RED signals available to an operator | DONE | Request counts by status class, latency histograms with p50/p95/p99, and named event counters for rate limiting, honeypot, geo, and outbox. |
 | Monitoring endpoint is access-controlled and fails closed | DONE | `404` with no token configured, `401` on missing/wrong token, constant-time comparison. |
-| Metric label cardinality is bounded | DONE | Route templates not paths; single `unmatched` series; `METRICS_MAX_SERIES` cap with reserved overflow budget and reported `overflowed`. |
+| Metric label cardinality is bounded | DONE | Route templates not paths; single `unmatched` series; `METRICS_MAX_ROUTES` cap with reserved overflow budget and reported `overflowed`. |
 
 ## Known defects found during compliance review
 
@@ -129,7 +129,7 @@ Status values:
 | `EVIDENCE.md` "Widget management" section listed login, memberships, and update/delete/list as PENDING although implemented | Stale evidence contradicted itself and understated completed work | Fixed — cross-referenced to the proving sections |
 | `capstone.yaml` declared a `seed:` command that does not exist | An evaluator running it would hit an error | Fixed — seed command implemented and verified |
 | `/metrics` was initially unauthenticated | Published error rates, latency, and honeypot hit counts to anyone — a map of where the system is weak | Fixed — operator token with `compare_digest`, and `404` when unconfigured, proven against a token-less container |
-| Metric labels initially came from the concrete request path | Cardinality bomb: walking `/widgets/{id}` would allocate one series per id | Fixed — route templates plus a reserved-budget `METRICS_MAX_SERIES` cap with reported overflow |
+| Metric labels initially came from the concrete request path | Cardinality bomb: walking `/widgets/{id}` would allocate one series per id | Fixed — route templates plus a reserved-budget `METRICS_MAX_ROUTES` cap with reported overflow |
 | The series cap did not budget for its own overflow rows | A cap of 4 actually settled at 6, so the bound did not hold | Fixed — overflow budget reserved up front; caught by an abuse test, not by review |
 | `X-Request-ID` was echoed after only a length check | Header and log injection via a caller-controlled value | Fixed — non-alphanumeric or long values replaced with a fresh UUID |
 | README `Limitations` still claimed no widget, submission, auth, tenant, worker, or dashboard implementation existed | Directly contradicted the feature list in the same file | Fixed — rewritten to state the real operational limits |

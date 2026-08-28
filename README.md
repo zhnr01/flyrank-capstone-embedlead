@@ -220,34 +220,28 @@ X-Metrics-Token: <token>
 
 The endpoint fails closed. With `METRICS_TOKEN` unset it returns `404`, so a deployment that forgets to configure it does not expose operational intelligence by default. A wrong or missing token returns `401`.
 
-```json
-{
-  "requests": [
-    {
-      "method": "GET",
-      "route": "/api/v1/public/widgets/{widget_id}/config",
-      "status_class": "2xx",
-      "count": 3
-    }
-  ],
-  "latency": [
-    {
-      "method": "GET",
-      "route": "/api/v1/public/widgets/{widget_id}/config",
-      "count": 3,
-      "sum_seconds": 0.0181,
-      "p50_seconds": 0.005,
-      "p95_seconds": 0.025,
-      "p99_seconds": 0.025,
-      "buckets": [{ "le": 0.005, "count": 2 }, { "le": 0.025, "count": 1 }]
-    }
-  ],
-  "events": [{ "name": "submission_stored", "outcome": "ok", "count": 1 }],
-  "cardinality": { "series": 8, "max_series": 512, "overflowed": false }
-}
+```text
+# HELP embedlead_requests_total HTTP requests by method, route template and status class.
+# TYPE embedlead_requests_total counter
+embedlead_requests_total{method="GET",route="/api/v1/public/widgets/{widget_id}/config",status_class="2xx"} 1.0
+embedlead_requests_total{method="POST",route="/api/v1/public/widgets/{widget_id}/submissions",status_class="2xx"} 1.0
+# HELP embedlead_request_duration_seconds HTTP request duration in seconds by method and route template.
+# TYPE embedlead_request_duration_seconds histogram
+embedlead_request_duration_seconds_bucket{le="0.005",method="GET",route="/api/v1/system/health/ready"} 19.0
+embedlead_request_duration_seconds_bucket{le="+Inf",method="GET",route="/api/v1/system/health/ready"} 131.0
+embedlead_request_duration_seconds_count{method="GET",route="/api/v1/system/health/ready"} 131.0
+embedlead_request_duration_seconds_sum{method="GET",route="/api/v1/system/health/ready"} 0.7947955816052854
+# HELP embedlead_events_total Domain events by name and outcome.
+# TYPE embedlead_events_total counter
+embedlead_events_total{name="submission_stored",outcome="ok"} 1.0
 ```
 
-Route labels are the **route template**, never the concrete path. `/widgets/91` and `/widgets/92` share one series, so an attacker cannot inflate memory by walking ids. Unmatched paths collapse into a single `unmatched` series for the same reason. Total series are capped by `METRICS_MAX_SERIES`; past the cap, counts are folded into an `other` row and `cardinality.overflowed` reports it rather than silently dropping data.
+Buckets are **cumulative**, as the exposition format requires: the `le="+Inf"` bucket equals
+`_count`. Quantiles are not precomputed — Prometheus interpolates them at query time
+(`histogram_quantile(0.95, sum by (le) (rate(embedlead_request_duration_seconds_bucket[5m])))`),
+which is why a hand-rolled p95 read off a bucket boundary would be wrong.
+
+Route labels are the **route template**, never the concrete path. `/widgets/91` and `/widgets/92` share one series, so an attacker cannot inflate memory by walking ids. Unmatched paths collapse into a single `unmatched` series for the same reason. Total series are capped by `METRICS_MAX_ROUTES`; past the cap, counts are folded into an `other` row and `cardinality.overflowed` reports it rather than silently dropping data.
 
 ### `POST /api/v1/widgets`
 
@@ -343,7 +337,7 @@ Allowed origins come from `BACKEND_CORS_ORIGINS`. CORS is a browser policy, not 
 
 `X-Forwarded-For` is deliberately ignored, because a client-supplied header would let any caller mint a fresh limiter key. Running behind a reverse proxy therefore requires `--proxy-headers` plus an explicit trusted-proxy list before any forwarding header may be believed.
 
-Limiter state is in-process: with N worker processes the effective limit becomes N x limit, and a restart clears it. A shared store such as Redis is required before scaling beyond a single container.
+Limiter state lives in Redis when `REDIS_URL` is set, using `limits`' moving-window strategy, so every replica shares one budget instead of each getting its own. Without `REDIS_URL` the limiter falls back to an in-process window, which is correct for a single container and is also the fail-open path when Redis is unreachable — see [Limitations](#limitations).
 
 #### Geo enrichment
 
@@ -469,17 +463,60 @@ Stretch features remain out of scope until the required acceptance probes pass.
 
 Stated deliberately, because knowing what a system does not do is part of operating it.
 
-**In-process state that does not survive scaling.** Rate-limit counters and the metrics registry both live in the process. With N worker processes the effective rate limit becomes N x limit, and each worker reports only its own slice of traffic. A shared store (Redis) and a scraped exposition format (Prometheus) are the correct fixes before running more than one container.
+**CORS restricts browsers, not the endpoint.** `BACKEND_CORS_ORIGINS` is enforced by
+`CORSMiddleware`, so a page on a disallowed origin cannot read the response — a preflight from an
+unlisted origin gets no `Access-Control-Allow-Origin` header at all. But CORS is a browser
+contract: a direct `curl` from any origin still receives `202`, because an embeddable widget has to
+accept posts from whatever site the tenant installed it on. The controls that actually defend the
+public endpoint are origin-independent: the shared rate limiter, the ASGI body-size guard,
+config-driven field validation, and the honeypot. Per-widget origin allow-listing is a real
+hardening step and is not implemented.
 
-**Metrics are pull-only and reset on restart.** The snapshot is JSON for a human or a simple scraper, not an OpenMetrics text endpoint, and there is no persistence, no histogram merging across instances, and no alert rules. Label cardinality is bounded by `METRICS_MAX_SERIES`, and overflow is reported rather than hidden, but the bound is defensive — it does not make the numbers cluster-wide.
+**Metrics are per replica, which is correct, and there are no alert rules.**
+`/api/v1/system/metrics` serves Prometheus text exposition (`text/plain; version=1.0.0`) behind a
+token, with cumulative histogram buckets and `le="+Inf"` equal to `_count`. Prometheus's pull model
+attaches `job` and `instance` labels per target, so N containers produce N label-distinguished
+series and aggregation belongs in PromQL (`sum by (route) (...)`) rather than in the application.
+What is missing is the operational layer around it: no scrape config or Prometheus server is
+shipped, no recording or alerting rules, and no Grafana dashboard. Route-label cardinality is
+bounded by `METRICS_MAX_ROUTES`, with overflow collapsed to a single `other` series rather than
+hidden. Counters reset when a container restarts, which `rate()` handles by design.
 
-**No distributed tracing.** A request id is generated, propagated through logs, and echoed in `X-Request-ID`, which is enough to correlate one request across log lines in one service. It is not a span tree, and there is no W3C `traceparent` propagation to downstream providers.
+**One process per container, so multiprocess metrics are not wired.** The image runs a single
+uvicorn worker. Running `--workers > 1` behind one port would need
+`prometheus_client`'s multiprocess mode and a per-container `PROMETHEUS_MULTIPROC_DIR`; that mode
+also drops summary quantiles and custom collectors, so it is deliberately not enabled.
 
-**Notification delivery is intentionally minimal.** Webhook only, fixed attempt budget, no exponential backoff, no SMTP transport, and no automatic dead-letter replay. The worker is also not yet a supervised Compose service.
+**The rate limiter fails open when Redis is unreachable.** With `REDIS_URL` set, limiter state
+lives in Redis via `limits`' moving-window strategy, so replicas share one budget instead of each
+getting its own. If Redis is down the request falls back to the in-process window rather than being
+rejected: for a public lead-capture form a dropped lead is worse than a tolerated burst. The
+fallback still enforces a limit, and Redis surfaces as a `degraded` sub-check in readiness without
+gating the aggregate status, so a Redis outage cannot mark the container unhealthy. The trade-off is
+explicit: during an outage the effective limit is per process again.
 
-**Index usage is unproven at demo data volume.** The composite widget index exists, but `EXPLAIN (ANALYZE, BUFFERS)` shows a sequential scan at six rows, which is correct planner behaviour. The index is recorded as unverified rather than claimed as an optimisation.
+**Redis is deliberately not durable.** `--save ""`, `--appendonly no`, `maxmemory 256mb`,
+`allkeys-lru`, and no volume. Restoring rate-limit counters older than the window is semantically
+wrong, and fork/fsync latency would sit on the request path. Eviction under memory pressure fails
+open, consistent with the outage policy above.
 
-**Operational scope.** Compose credentials and the metrics token are local-development placeholders. Cloud deployment, TLS termination, backups, log shipping, and CI are not configured.
+**No distributed tracing.** A request id is generated, propagated through logs via a `ContextVar`,
+and echoed in `X-Request-ID`, which is enough to correlate one request across log lines in one
+service. It is not a span tree, and there is no W3C `traceparent` propagation to the geo providers
+or the notification webhook.
+
+**Notification delivery is intentionally minimal.** Webhook only, fixed attempt budget, no
+exponential backoff, no SMTP transport, and no automatic dead-letter replay. The worker
+(`python -m app.worker`) is a documented command, not a supervised Compose service.
+
+**Index usage is unproven at demo data volume.** The composite widget index exists, and the
+dashboard time-series index is proven with `EXPLAIN (ANALYZE, BUFFERS)` at 50,000 rows
+(`Bitmap Index Scan`, 1,249 rows, 6 buffers). The widget lookup index still shows a sequential scan
+at six rows, which is correct planner behaviour and is recorded as unverified rather than claimed as
+an optimisation.
+
+**Operational scope.** Compose credentials and the metrics token are local-development
+placeholders. Cloud deployment, TLS termination, backups, log shipping, and CI are not configured.
 
 ## Public project documents
 

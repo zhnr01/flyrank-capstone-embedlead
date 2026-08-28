@@ -36,6 +36,10 @@ class GeoProviderChain:
     def __init__(self, providers: Sequence[GeoProvider]) -> None:
         self._providers = tuple(providers)
 
+    @property
+    def providers(self) -> tuple[GeoProvider, ...]:
+        return self._providers
+
     def lookup(self, ip_address: str) -> GeoLocation | None:
         if not is_public_address(ip_address):
             return None
