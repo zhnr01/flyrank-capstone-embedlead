@@ -14,7 +14,7 @@ Status values:
 |---|---|---|
 | `README.md` | DONE | Architecture sketch, run steps, seed step, per-endpoint API docs, and an honest limitations section. |
 | `capstone.yaml` | DONE | `run`, `seed`, `test`, `base_url`, worker command, demo page, and endpoints all declared and real. |
-| `EVIDENCE.md` | DONE | Pasted runtime proof per slice, including the acceptance probes. |
+| `EVIDENCE.md` | DONE | Pasted runtime proof per slice, including the acceptance probes and two full demo-rehearsal transcripts (60 assertions across 21 steps). |
 | `BUILDLOG.md` | DONE | Maintained per slice, including mistakes and corrections. |
 | `.env.example` | DONE | Placeholder values only; no secrets. |
 | `LICENSE` | DONE | MIT. |

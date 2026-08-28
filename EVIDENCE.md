@@ -1717,3 +1717,302 @@ uv run mypy          Success: no issues found in 100 source files
 harness              HARNESS VERIFIED
 clean clone          imports, 244 passed / 12 skipped
 ```
+
+## Unit 4 — demo rehearsal (§13)
+
+The brief asks for a six-minute live demo. The deliverable of a *rehearsal* is a transcript, not a
+recording: `scripts/rehearsal.py` drives the whole story over HTTP and `docker compose`, asserts
+every step, and exits non-zero if any check fails. Run twice, as the spec requires.
+
+Twenty-one steps, sixty assertions. Every one of the six acceptance probes from section 12 appears,
+plus the fifteen production-concern lanes the harness enforces. The script starts by destroying the
+volume, so each pass proves migration safety from empty rather than inheriting state.
+
+### Why twice is not ceremony
+
+Pass 1 failed. Two checks, both defects in the rehearsal itself rather than the application:
+
+```text
+REHEARSAL FAILED — 2 check(s) did not pass
+  - step 3: a wrong password is refused got 422
+  - step 6: config carries fields
+```
+
+- `TokenRequest.password` has `min_length=8` (`app/api/schemas/auth.py:8`), so the deliberately wrong
+  password `"wrong"` was rejected by *validation* with 422 before authentication ran. The check
+  claimed to prove "a wrong password is refused" while actually proving "a short string is refused" —
+  a weaker assertion wearing a stronger label. Fixed by sending a wrong password long enough to reach
+  the auth path.
+- `fields` lives under the `config` key, not at the top level of the config response. The assertion
+  was reading the wrong shape.
+
+Neither was an application bug, and that is the point: a demo script that has only ever been written
+has not been tested. Had this been a live demo, step 3 would have shown a 422 where the narration
+promised a 401, and step 6 would have reported an empty form.
+
+### Pass 1 — the failing run, kept deliberately
+
+```text
+========================================================================
+DEMO REHEARSAL — FlyRank EmbedLead
+========================================================================
+
+--- STEP 1: migration safety: start from an empty volume, migrate to head ---
+  [PASS] stack reached readiness
+  [PASS] alembic at head  0009_submission_answers
+  [PASS] service db running
+  [PASS] service redis running
+  [PASS] service backend running
+  [PASS] service worker running
+
+--- STEP 2: one-command config: seed deterministic demo data ---
+  [PASS] seed reported completion
+  [PASS] demo login advertised
+
+--- STEP 3: authentication: a real login, not a pre-baked token ---
+  [PASS] owner obtained a bearer token
+  [FAIL] a wrong password is refused  got 422
+  [PASS] the 401 body is opaque
+
+--- STEP 4: authorization: missing identity and cross-tenant access both refused ---
+  [PASS] no bearer token is refused  got 401
+  [PASS] a forged token is refused  got 401
+  [PASS] another tenant's widget is not found  got 404
+
+--- STEP 5: probe 1: a valid cross-origin submission is stored ---
+  [PASS] submission accepted  got 202
+  [PASS] row persisted  0 -> 1
+
+--- STEP 6: serialization: the widget renders from stored config ---
+  [PASS] config served  got 200
+  [FAIL] config carries fields
+  [PASS] an ETag is issued
+
+--- STEP 7: caching: an unchanged config returns 304 ---
+  [PASS] conditional request is 304  got 304
+
+--- STEP 8: probe 2: malformed and oversized payloads give clean 4xx, never 500 ---
+  [PASS] invalid email refused with 4xx  got 422
+  [PASS] no 500 on malformed input
+  [PASS] oversized body refused  got 413
+
+--- STEP 9: probe 6: a filled honeypot is dropped, not stored ---
+  [PASS] bot receives an ordinary 202  got 202
+  [PASS] nothing was stored  1 -> 1
+
+--- STEP 10: idempotency: a duplicate submission does not double-insert the outbox ---
+  [PASS] every outbox key is unique  2/2
+  [PASS] the outbox grew  1 -> 2
+
+--- STEP 11: probe 3 + concurrency: a burst yields 429, then normal service resumes ---
+  [PASS] 429 appeared under burst  [202, 202, 202, 202, 202, 429, 429, 429, 429]
+  [PASS] Retry-After was advertised
+  [PASS] normal request succeeds right after  got 202
+
+--- STEP 12: capacity: limiter state is shared, not per process ---
+  [PASS] limiter keys live in redis  ratelimit:LIMITER/widget:1/30/60/second
+
+--- STEP 13: CORS: a disallowed origin gets no browser grant ---
+  [PASS] no allow-origin for an unlisted origin
+  [PASS] the allowed origin is granted
+
+--- STEP 14: observability: a request id correlates a response header to a log line ---
+  [PASS] the request id is echoed  rehearsal-trace-id-4242
+  [PASS] the same id appears in the logs
+
+--- STEP 15: observability: metrics are token-gated Prometheus text ---
+  [PASS] no token is refused  got 401
+  [PASS] scrape succeeds with a token  got 200
+  [PASS] content type is exposition text
+  [PASS] exposition carries # TYPE embedlead_requests
+  [PASS] exposition carries le="+Inf"
+  [PASS] exposition carries embedlead_request_duration_seconds_count
+  [PASS] cumulative buckets: +Inf equals _count  14.0 vs 14.0
+
+--- STEP 16: routing: an unmatched path collapses to one metric series ---
+  [PASS] unmatched paths share one label
+
+--- STEP 17: probe 5: the notification side effect is off the request path ---
+  [PASS] submission succeeded independently of delivery  got 202
+  [PASS] lead was stored  8 -> 9
+  [PASS] the supervised worker delivered with no human command  sent=9
+
+--- STEP 18: probe 4 + graceful degradation: kill geo provider A, B still enriches ---
+  [PASS] provider A removed, B remains  ['IpapiCoProvider']
+  [PASS] both down yields an empty chain  []
+  [PASS] a submission still succeeds without geo  got 202
+
+--- STEP 19: graceful degradation: stop redis, the public form must still accept ---
+  [PASS] submission accepted with redis down (fail open)  got 202
+  [PASS] readiness stays 200  got 200
+  [PASS] redis reports degraded, not fatal  degraded
+  [PASS] aggregate status follows the database
+  [PASS] stack recovered
+
+--- STEP 20: graceful shutdown: a committed lead survives a restart ---
+  [PASS] lead accepted  got 202
+  [PASS] stack came back
+  [PASS] the lead survived  rows=1
+  [PASS] shutdown ran the lifespan
+
+--- STEP 21: dashboard: the owner sees the leads that were captured ---
+  [PASS] dashboard served  got 200
+  [PASS] submissions are visible  total=12
+
+========================================================================
+REHEARSAL FAILED — 2 check(s) did not pass
+  - step 3: a wrong password is refused got 422
+  - step 6: config carries fields 
+exit=1
+```
+
+### Pass 2 — the corrected script, clean end to end
+
+```text
+========================================================================
+DEMO REHEARSAL — FlyRank EmbedLead
+========================================================================
+
+--- STEP 1: migration safety: start from an empty volume, migrate to head ---
+  [PASS] stack reached readiness
+  [PASS] alembic at head  0009_submission_answers
+  [PASS] service db running
+  [PASS] service redis running
+  [PASS] service backend running
+  [PASS] service worker running
+
+--- STEP 2: one-command config: seed deterministic demo data ---
+  [PASS] seed reported completion
+  [PASS] demo login advertised
+
+--- STEP 3: authentication: a real login, not a pre-baked token ---
+  [PASS] owner obtained a bearer token
+  [PASS] a wrong password is refused  got 401
+  [PASS] the 401 body is opaque
+
+--- STEP 4: authorization: missing identity and cross-tenant access both refused ---
+  [PASS] no bearer token is refused  got 401
+  [PASS] a forged token is refused  got 401
+  [PASS] another tenant's widget is not found  got 404
+
+--- STEP 5: probe 1: a valid cross-origin submission is stored ---
+  [PASS] submission accepted  got 202
+  [PASS] row persisted  0 -> 1
+
+--- STEP 6: serialization: the widget renders from stored config ---
+  [PASS] config served  got 200
+  [PASS] config carries fields  3 fields
+  [PASS] an ETag is issued
+
+--- STEP 7: caching: an unchanged config returns 304 ---
+  [PASS] conditional request is 304  got 304
+
+--- STEP 8: probe 2: malformed and oversized payloads give clean 4xx, never 500 ---
+  [PASS] invalid email refused with 4xx  got 422
+  [PASS] no 500 on malformed input
+  [PASS] oversized body refused  got 413
+
+--- STEP 9: probe 6: a filled honeypot is dropped, not stored ---
+  [PASS] bot receives an ordinary 202  got 202
+  [PASS] nothing was stored  1 -> 1
+
+--- STEP 10: idempotency: a duplicate submission does not double-insert the outbox ---
+  [PASS] every outbox key is unique  2/2
+  [PASS] the outbox grew  1 -> 2
+
+--- STEP 11: probe 3 + concurrency: a burst yields 429, then normal service resumes ---
+  [PASS] 429 appeared under burst  [202, 202, 202, 202, 202, 429, 429, 429, 429]
+  [PASS] Retry-After was advertised
+  [PASS] normal request succeeds right after  got 202
+
+--- STEP 12: capacity: limiter state is shared, not per process ---
+  [PASS] limiter keys live in redis  ratelimit:LIMITER/ip:172.18.0.1/5/60/second
+
+--- STEP 13: CORS: a disallowed origin gets no browser grant ---
+  [PASS] no allow-origin for an unlisted origin
+  [PASS] the allowed origin is granted
+
+--- STEP 14: observability: a request id correlates a response header to a log line ---
+  [PASS] the request id is echoed  rehearsal-trace-id-4242
+  [PASS] the same id appears in the logs
+
+--- STEP 15: observability: metrics are token-gated Prometheus text ---
+  [PASS] no token is refused  got 401
+  [PASS] scrape succeeds with a token  got 200
+  [PASS] content type is exposition text
+  [PASS] exposition carries # TYPE embedlead_requests
+  [PASS] exposition carries le="+Inf"
+  [PASS] exposition carries embedlead_request_duration_seconds_count
+  [PASS] cumulative buckets: +Inf equals _count  14.0 vs 14.0
+
+--- STEP 16: routing: an unmatched path collapses to one metric series ---
+  [PASS] unmatched paths share one label
+
+--- STEP 17: probe 5: the notification side effect is off the request path ---
+  [PASS] submission succeeded independently of delivery  got 202
+  [PASS] lead was stored  8 -> 9
+  [PASS] the supervised worker delivered with no human command  sent=9
+
+--- STEP 18: probe 4 + graceful degradation: kill geo provider A, B still enriches ---
+  [PASS] provider A removed, B remains  ['IpapiCoProvider']
+  [PASS] both down yields an empty chain  []
+  [PASS] a submission still succeeds without geo  got 202
+
+--- STEP 19: graceful degradation: stop redis, the public form must still accept ---
+  [PASS] submission accepted with redis down (fail open)  got 202
+  [PASS] readiness stays 200  got 200
+  [PASS] redis reports degraded, not fatal  degraded
+  [PASS] aggregate status follows the database
+  [PASS] stack recovered
+
+--- STEP 20: graceful shutdown: a committed lead survives a restart ---
+  [PASS] lead accepted  got 202
+  [PASS] stack came back
+  [PASS] the lead survived  rows=1
+  [PASS] shutdown ran the lifespan
+
+--- STEP 21: dashboard: the owner sees the leads that were captured ---
+  [PASS] dashboard served  got 200
+  [PASS] submissions are visible  total=12
+
+========================================================================
+REHEARSAL PASSED — all checks green across 21 steps
+exit=0
+```
+
+### What the transcript proves
+
+| Concern | Step | Evidence in the run |
+|---|---|---|
+| Migration safety | 1 | volume destroyed, four services healthy, `alembic_version` at `0009_submission_answers` |
+| Configuration | 2 | one seed command, deterministic demo data |
+| Authentication | 3 | a real login for a bearer token; wrong password 401 with an opaque body |
+| Authorization | 4 | no token 401, forged token 401, another tenant's widget 404 |
+| Probe 1 | 5 | cross-origin submission 202 and the row count advanced |
+| Serialization | 6 | the widget renders from stored config |
+| Caching | 7 | unchanged config returns 304 against its ETag |
+| Probe 2 / input validation | 8 | invalid email and a 200 KB body both 4xx, never 500 |
+| Probe 6 | 9 | filled honeypot gets an ordinary 202 and stores nothing |
+| Idempotency | 10 | every outbox key distinct, count still advanced |
+| Probe 3 / concurrency | 11 | burst produced 429 with `Retry-After`; the next request 202 |
+| Capacity limits | 12 | limiter keys observed in Redis, so state is shared not per process |
+| CORS | 13 | unlisted origin gets no allow-origin header; the allowed one does |
+| Observability | 14 | `X-Request-ID` echoed and the same id found in the container log |
+| Observability | 15 | `/metrics` 401 without a token; with one, exposition text where `le="+Inf"` equals `_count` |
+| Routing | 16 | unmatched paths collapse to a single `unmatched` series |
+| Probe 5 | 17 | submission 202 independent of delivery; the supervised worker then marked it `sent` with no human command |
+| Probe 4 / degradation | 18 | provider A disabled leaves `IpapiCoProvider`; both disabled yields an empty chain; the submission still succeeds |
+| Graceful degradation | 19 | Redis stopped: submission still 202, readiness still 200 with `redis: degraded`, aggregate status following the database |
+| Graceful shutdown | 20 | a committed lead survived `restart`, and `application_shutdown` appears in the log |
+| Dashboard | 21 | the owner sees `total=12` captured submissions |
+
+### Operating the rehearsal
+
+```text
+docker compose down -v
+uv run python scripts/rehearsal.py
+```
+
+Roughly two minutes wall-clock, because it deliberately stops Redis, restarts the backend and waits
+for readiness between phases. A live six-minute demo follows the same twenty-one steps with narration
+in place of assertions; this transcript is the script for it.

@@ -759,3 +759,67 @@ harness              HARNESS VERIFIED
 ```
 
 Full transcripts and the 26-item audit scorecard in `EVIDENCE.md`.
+
+## Session 12 — Unit 4: the rehearsal, and why the second pass matters
+
+The brief asks for a six-minute live demo (§13). The deliverable of a rehearsal is a transcript, not
+a recording, so `scripts/rehearsal.py` drives the whole story over HTTP and `docker compose`, asserts
+every step, and exits non-zero if anything fails. Twenty-one steps, sixty assertions, all six
+acceptance probes from section 12, and the fifteen production-concern lanes the harness enforces.
+
+### Concept learned
+
+**A demo script that has only been written has not been tested.** Pass 1 failed on two checks and
+both were defects in the rehearsal rather than the application — which is exactly the class of
+problem a rehearsal exists to catch, and exactly what would have derailed a live walkthrough.
+
+**An assertion can wear a stronger label than it earns.** Step 3 claimed to prove "a wrong password
+is refused" and returned 422, not 401. Cause: `TokenRequest.password` has `min_length=8`, so the
+deliberately wrong password `"wrong"` was rejected by *validation* before authentication ran. The
+check was really proving "a short string is refused" — a weaker property under a stronger name. That
+is worse than a failing test, because it would have passed if I had asserted `code != 200`.
+
+**Read the response shape, do not assume it.** Step 6 read `fields` from the top level of the config
+response; it lives under `config`. The endpoint was correct both before and after.
+
+### Mistakes and corrections
+
+**I invented two symbols while writing the script and the house rule caught them.** The seeded
+password was guessed as `owner-password` (actually `local-demo-password`, `app/seed.py:14`) and the
+dashboard endpoint as `/dashboard/summary` (actually `/dashboard/stats`, with `/submissions` as its
+sibling). Both were found by grepping the source before the first run rather than by a failure —
+"never invent a file, symbol, or command" is in `AGENTS.md` for this reason.
+
+**The rehearsal destroys the volume on every run, deliberately.** An evaluator starts from a clean
+clone, so inheriting seeded state from a previous pass would prove less than nothing. `docker compose
+down -v` first means step 1 also serves as the migration-safety proof: nine migrations replay into an
+empty database and `alembic_version` lands on `0009_submission_answers`.
+
+### Decisions
+
+**Assert, do not narrate.** The script could have printed a story for a human to read. Instead every
+step carries a machine check and the runner exits 1 on any failure, so the transcript cannot claim
+success it did not achieve. `REHEARSAL PASSED — all checks green across 21 steps` is a verdict, not a
+description.
+
+**Keep the failing pass-1 transcript in `EVIDENCE.md`.** Deleting it would leave a suspiciously clean
+record and hide the two defects the process caught. The point of running twice is visible only if the
+first run is preserved.
+
+**One script, not a runbook of copy-paste commands.** A six-minute demo has to survive nerves; a
+single command that self-verifies is far more likely to hold up than twenty-one commands pasted in
+order. The transcript doubles as the narration script for a live run.
+
+### Verification
+
+```text
+pass 1               58 pass, 2 fail  (both rehearsal defects)  exit=1
+pass 2               60 pass, 0 fail across 21 steps            exit=0
+uv run pytest        261 passed
+uv run ruff check .  All checks passed!
+uv run mypy          Success: no issues found in 100 source files
+harness              HARNESS VERIFIED
+specs                27 done / 0 open
+```
+
+Both transcripts in `EVIDENCE.md`, including the per-concern mapping table.
