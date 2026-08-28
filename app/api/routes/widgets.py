@@ -6,11 +6,13 @@ from fastapi.exceptions import HTTPException
 from app.api.auth_dependencies import get_current_identity
 from app.api.schemas.widgets import (
     WidgetCreate,
+    WidgetEmbedResponse,
     WidgetListResponse,
     WidgetResponse,
     WidgetUpdate,
 )
 from app.api.widget_dependencies import get_widget_repository
+from app.core.config import settings
 from app.core.identity import Identity
 from app.repositories.widgets import WidgetRepository
 
@@ -111,3 +113,30 @@ def delete_widget(
             detail="Widget not found",
         )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/{widget_id}/embed", response_model=WidgetEmbedResponse)
+def widget_embed_snippet(
+    widget_id: int,
+    identity: IdentityDep,
+    repository: WidgetRepositoryDep,
+) -> WidgetEmbedResponse:
+    widget = repository.get_for_tenant(identity=identity, widget_id=widget_id)
+    if widget is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Widget not found",
+        )
+    version = settings.widget_bundle_version
+    base = settings.public_base_url.rstrip("/")
+    bundle_url = f"{base}/api/v1/public/widgets/bundle/{version}/widget.js"
+    snippet = (
+        f'<script src="{bundle_url}" '
+        f'data-widget-id="{widget.id}" async></script>'
+    )
+    return WidgetEmbedResponse(
+        widget_id=widget.id,
+        bundle_version=version,
+        bundle_url=bundle_url,
+        snippet=snippet,
+    )

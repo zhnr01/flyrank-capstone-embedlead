@@ -26,6 +26,21 @@ class FailingTransport:
         raise ConnectionError("transport unavailable")
 
 
+class RecordingAlerter:
+    def __init__(self) -> None:
+        self.alerts: list[tuple[str, int, str]] = []
+
+    def dead_letter(
+        self,
+        *,
+        idempotency_key: str,
+        topic: str,
+        attempts: int,
+        error: str,
+    ) -> None:
+        self.alerts.append((idempotency_key, attempts, error))
+
+
 def test_idempotency_key_is_derived_and_stable() -> None:
     assert submission_created_key(42) == "submission:42:created"
     assert submission_created_key(42) == submission_created_key(42)
@@ -135,6 +150,53 @@ def test_exhausted_attempts_move_message_to_dead_letter() -> None:
     assert message.status == "failed"
     assert message.attempts == 2
     assert transport.attempts == 2
+
+
+def test_dead_letter_emits_a_failure_alert() -> None:
+    repository = InMemoryOutboxRepository()
+    repository.enqueue(
+        topic="submission.created",
+        idempotency_key=submission_created_key(11),
+        payload={},
+    )
+    alerter = RecordingAlerter()
+    worker = OutboxWorker(
+        repository,
+        FailingTransport(),
+        max_attempts=2,
+        alerter=alerter,
+    )
+
+    worker.run_once()
+    assert alerter.alerts == []
+
+    worker.run_once()
+
+    assert len(alerter.alerts) == 1
+    key, attempts, error = alerter.alerts[0]
+    assert key == "submission:11:created"
+    assert attempts == 2
+    assert "ConnectionError" in error
+
+
+def test_successful_delivery_emits_no_alert() -> None:
+    repository = InMemoryOutboxRepository()
+    repository.enqueue(
+        topic="submission.created",
+        idempotency_key=submission_created_key(12),
+        payload={},
+    )
+    alerter = RecordingAlerter()
+    worker = OutboxWorker(
+        repository,
+        CountingTransport(),
+        max_attempts=3,
+        alerter=alerter,
+    )
+
+    worker.run_once()
+
+    assert alerter.alerts == []
 
 
 @pytest.mark.parametrize("limit", [1, 5])

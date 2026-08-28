@@ -26,11 +26,11 @@ Status values:
 | # | Part | Status | Gap |
 |---|---|---|---|
 | 1 | Widget management API (tenant-isolated CRUD + auth) | DONE | Create, read, list, patch, delete all tenant-scoped and proven. |
-| 2 | Embed snippet generation | TODO | Per-widget `<script>` line not yet returned. |
-| 3 | Fast cached widget delivery | TODO | No config endpoint, no versioned bundle, no cache headers. |
+| 2 | Embed snippet generation | DONE | `GET /api/v1/widgets/{id}/embed` returns the tenant-scoped `<script>` line. |
+| 3 | Fast cached widget delivery | DONE | Config with content-hash ETag and 304 revalidation; versioned bundle with a one-year immutable policy. |
 | 4 | Public submission endpoint | DONE | CORS + preflight, boundary validation, 413 guard, tenant-linked storage, all proven. |
 | 5 | Protection, enrichment, safe side effects | DONE | Rate limiting, honeypot, geo fallback chain, and transactional-outbox side effect all proven. |
-| 6 | Owner dashboard API | TODO | No submission list or analytics. |
+| 6 | Owner dashboard API | DONE | Tenant-scoped submission list with cursor pagination plus aggregation stats. |
 
 ## Section 6 — definition of done
 
@@ -41,7 +41,7 @@ Status values:
 | Authenticated CRUD; unauthenticated rejected | DONE | `EVIDENCE.md` widget lifecycle; 401 without token. |
 | Tenant A cannot read or modify tenant B's widgets | DONE | Foreign GET/PATCH/DELETE all return 404. |
 | Tenant isolation for **submissions** | DONE | `tenant_id` derived from the addressed widget row; verified in SQL that every submission's tenant matches its widget's tenant. |
-| Embed snippet generated per widget | TODO | — |
+| Embed snippet generated per widget | DONE | Absolute configured URL, `data-widget-id`, `async`; foreign widget returns 404. |
 
 ### Widget delivery
 
@@ -86,7 +86,7 @@ Status values:
 
 | Probe | What it checks | Status |
 |---|---|---|
-| 1 | Valid submission from second-origin page → stored, 2xx, visible in dashboard | TODO |
+| 1 | Valid submission from second-origin page → stored, 2xx, visible in dashboard | DONE |
 | 2 | Malformed and oversized payload → clean 4xx JSON, never 500 | DONE |
 | 3 | Burst → 429s appear, normal request right after still succeeds | DONE |
 | 4 | Geo A down → B enriches; both down → stored without geo | DONE |
@@ -102,9 +102,9 @@ Status values:
 | 3 | ≥1 background job, off the request path, retries + failure alert | DONE | Transactional outbox plus `python -m app.worker`; bounded attempts, dead-letter status with `last_error` recorded. |
 | 4 | Real persistence: migrations, right indexes, isolated tenants | DONE | Six Alembic migrations; composite indexes; tenant predicates in SQL. |
 | 5 | Idempotency where it matters — retried action happens once | DONE | Derived idempotency key with a database unique constraint; duplicate enqueue is a no-op, proven at runtime. |
-| 6 | Secrets clean — env only, never logged | DONE | `.env` ignored, `.env.example` placeholders, production rejects the development key. |
+| 6 | Secrets clean — env only, never logged | DONE | `.env` ignored, `.env.example` placeholders, production rejects the development key. Webhook secret signs via HMAC and is never transmitted or logged, asserted by test. |
 | 7 | Cost tracked if AI is used | N/A | No AI feature in this system. |
-| 8 | Tests that matter — the scary cases, deterministic | PARTIAL | Auth/tenant/CORS/oversized/abuse cases covered with an injected clock; dependency-failure cases pending. |
+| 8 | Tests that matter — the scary cases, deterministic | DONE | 106 tests: auth, tenant isolation, CORS, oversized, abuse with an injected clock, provider failure, real webhook failure, caching/304, dashboard scoping. |
 
 ## Known defects found during compliance review
 

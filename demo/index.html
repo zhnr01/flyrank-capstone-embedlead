@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Acme Coffee — EmbedLead second-origin demo</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #16202a;
+        --muted: #5d6b79;
+        --line: #dfe5ec;
+        --accent: #1f6feb;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 16px/1.55 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        color: var(--ink);
+        background: #f6f8fb;
+      }
+      header, main, footer { max-width: 46rem; margin: 0 auto; padding: 0 1.5rem; }
+      header { padding-top: 3rem; }
+      h1 { font-size: 1.9rem; margin: 0 0 0.35rem; letter-spacing: -0.02em; }
+      .lede { color: var(--muted); margin: 0 0 2rem; }
+      .card {
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin-bottom: 1.5rem;
+      }
+      .origin {
+        display: inline-flex;
+        gap: 0.5rem;
+        align-items: baseline;
+        font: 600 0.8rem/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        background: #eef4ff;
+        color: #1a4fb4;
+        border-radius: 999px;
+        padding: 0.45rem 0.7rem;
+        margin-bottom: 1.25rem;
+      }
+      h2 { font-size: 1.05rem; margin: 0 0 0.75rem; }
+      .embedlead-widget form { display: grid; gap: 0.75rem; }
+      .embedlead-widget h3 { margin: 0; font-size: 1.15rem; }
+      .embedlead-widget label {
+        display: grid;
+        gap: 0.3rem;
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--muted);
+      }
+      .embedlead-widget input,
+      .embedlead-widget textarea {
+        font: inherit;
+        padding: 0.6rem 0.7rem;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        color: var(--ink);
+      }
+      .embedlead-widget input:focus,
+      .embedlead-widget textarea:focus {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+        border-color: var(--accent);
+      }
+      .embedlead-widget textarea { min-height: 5.5rem; resize: vertical; }
+      .embedlead-widget button {
+        font: 600 1rem/1 inherit;
+        padding: 0.7rem 1rem;
+        border: 0;
+        border-radius: 8px;
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+        justify-self: start;
+      }
+      .embedlead-widget button:disabled { opacity: 0.55; cursor: progress; }
+      .embedlead-widget [data-embedlead-status] {
+        margin: 0;
+        min-height: 1.4rem;
+        font-size: 0.9rem;
+        color: var(--muted);
+      }
+      .embedlead-widget [data-embedlead-status][data-state="error"] { color: #b4232c; }
+      code { font: 0.85rem ui-monospace, Menlo, Consolas, monospace; }
+      ol { color: var(--muted); padding-left: 1.2rem; }
+      footer { padding-bottom: 3rem; color: var(--muted); font-size: 0.85rem; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="origin">served from <span id="page-origin">a different origin</span></span>
+      <h1>Acme Coffee</h1>
+      <p class="lede">
+        This page pretends to be a customer's website. It contains no form code of
+        its own — only the one-line EmbedLead snippet below the heading.
+      </p>
+    </header>
+
+    <main>
+      <section class="card">
+        <h2>Talk to us</h2>
+        <script
+          src="http://localhost:8000/api/v1/public/widgets/bundle/v1/widget.js"
+          data-widget-id="1"
+          async
+        ></script>
+      </section>
+
+      <section class="card">
+        <h2>How to verify this is genuinely cross-origin</h2>
+        <ol>
+          <li>Serve this file on port 5500, not 8000.</li>
+          <li>Open DevTools, Network tab.</li>
+          <li>
+            The <code>config</code> request shows <code>200</code> first, then
+            <code>304 Not Modified</code> on reload.
+          </li>
+          <li>
+            The <code>widget.js</code> response carries
+            <code>Cache-Control: public, max-age=31536000, immutable</code>.
+          </li>
+          <li>
+            Submitting the form issues a cross-origin <code>POST</code> that
+            returns <code>202</code>, preceded by an <code>OPTIONS</code> preflight.
+          </li>
+        </ol>
+      </section>
+    </main>
+
+    <footer>
+      Change <code>data-widget-id</code> to target a different widget. An unknown id
+      renders nothing and leaves this page working.
+    </footer>
+
+    <script>
+      document.getElementById("page-origin").textContent = window.location.origin;
+    </script>
+  </body>
+</html>

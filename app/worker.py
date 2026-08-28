@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.db import engine
 from app.repositories.outbox import SqlAlchemyOutboxRepository
-from app.services.notifications import LoggingNotificationTransport
+from app.services.notifications import build_transport
 from app.services.outbox_worker import OutboxWorker
 
 logging.basicConfig(
@@ -18,7 +18,8 @@ logger = logging.getLogger("app.worker")
 
 
 def run_outbox_worker(*, once: bool) -> int:
-    transport = LoggingNotificationTransport()
+    transport = build_transport()
+    logger.info("outbox worker transport=%s", transport.name)
     delivered_total = 0
     while True:
         with Session(engine) as session:

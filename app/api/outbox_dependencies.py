@@ -5,7 +5,7 @@ from fastapi import Depends
 from app.api.deps import SessionDep
 from app.core.outbox import NotificationTransport
 from app.repositories.outbox import OutboxRepository, SqlAlchemyOutboxRepository
-from app.services.notifications import LoggingNotificationTransport
+from app.services.notifications import build_transport
 
 
 def get_outbox_repository(session: SessionDep) -> OutboxRepository:
@@ -13,7 +13,7 @@ def get_outbox_repository(session: SessionDep) -> OutboxRepository:
 
 
 def get_notification_transport() -> NotificationTransport:
-    return LoggingNotificationTransport()
+    return build_transport()
 
 
 class UnitOfWork(Protocol):

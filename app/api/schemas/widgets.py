@@ -24,3 +24,17 @@ class WidgetUpdate(BaseModel):
 class WidgetListResponse(BaseModel):
     data: list[WidgetResponse]
     next_after_id: int | None
+
+
+class WidgetEmbedResponse(BaseModel):
+    widget_id: int
+    bundle_version: str
+    bundle_url: str
+    snippet: str
+
+
+class WidgetConfigResponse(BaseModel):
+    widget_id: int
+    name: str
+    kind: str
+    version: str

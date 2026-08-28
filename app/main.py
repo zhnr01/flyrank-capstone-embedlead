@@ -1,7 +1,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, public_submissions, system, widgets
+from app.api.routes import (
+    auth,
+    dashboard,
+    public_submissions,
+    public_widgets,
+    system,
+    widgets,
+)
 from app.core.config import settings
 
 app = FastAPI(
@@ -23,3 +30,5 @@ app.include_router(system.router, prefix="/api/v1/system", tags=["system"])
 app.include_router(widgets.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(public_submissions.router, prefix="/api/v1")
+app.include_router(public_widgets.router, prefix="/api/v1")
+app.include_router(dashboard.router, prefix="/api/v1")

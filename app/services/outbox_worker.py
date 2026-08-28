@@ -1,9 +1,39 @@
 import logging
+from typing import Protocol
 
 from app.core.outbox import NotificationTransport
 from app.repositories.outbox import OutboxRepository
 
 logger = logging.getLogger(__name__)
+
+
+class FailureAlerter(Protocol):
+    def dead_letter(
+        self,
+        *,
+        idempotency_key: str,
+        topic: str,
+        attempts: int,
+        error: str,
+    ) -> None: ...
+
+
+class LoggingFailureAlerter:
+    def dead_letter(
+        self,
+        *,
+        idempotency_key: str,
+        topic: str,
+        attempts: int,
+        error: str,
+    ) -> None:
+        logger.error(
+            "ALERT outbox dead letter topic=%s key=%s attempts=%s error=%s",
+            topic,
+            idempotency_key,
+            attempts,
+            error,
+        )
 
 
 class OutboxWorker:
@@ -14,6 +44,7 @@ class OutboxWorker:
         *,
         max_attempts: int = 3,
         batch_size: int = 20,
+        alerter: FailureAlerter | None = None,
     ) -> None:
         if max_attempts < 1:
             raise ValueError("max_attempts must be at least 1")
@@ -21,6 +52,7 @@ class OutboxWorker:
         self._transport = transport
         self._max_attempts = max_attempts
         self._batch_size = batch_size
+        self._alerter = alerter or LoggingFailureAlerter()
 
     def run_once(self) -> int:
         messages = self._repository.claim_pending(limit=self._batch_size)
@@ -52,6 +84,13 @@ class OutboxWorker:
                     error=error,
                     exhausted=exhausted,
                 )
+                if exhausted:
+                    self._alerter.dead_letter(
+                        idempotency_key=message.idempotency_key,
+                        topic=message.topic,
+                        attempts=attempts,
+                        error=error,
+                    )
                 continue
             self._repository.mark_sent(message.id, attempts=attempts)
             processed += 1

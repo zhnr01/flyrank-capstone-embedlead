@@ -24,6 +24,9 @@ A backend capstone for serving embeddable lead-capture widgets and safely accept
 - Abuse protection: per-IP and per-widget sliding-window rate limits with `Retry-After`, plus a honeypot spam control.
 - Advisory IP geo enrichment with an ordered provider fallback chain that degrades to a stored row with no location.
 - Transactional outbox with a separate worker process: notifications are at-least-once, idempotent, and can never lose a lead.
+- Cached widget delivery: content-hash ETag with `304` revalidation, an immutably versioned bundle, and a per-widget embed snippet.
+- Owner dashboard: tenant-scoped submission list with cursor pagination plus aggregation stats.
+- A second-origin demo page and a deterministic seed command, so the whole flow is reproducible in a browser.
 
 ## Why this system exists
 
@@ -347,7 +350,32 @@ Delivery is at-least-once, so the idempotency key is what makes repeats harmless
 SELECT id, idempotency_key, attempts, last_error FROM outbox_messages WHERE status = 'failed';
 ```
 
-The transport is currently a logging stand-in rather than real SMTP, so no credentials live in this repository; swapping it means adding one class that implements `NotificationTransport`. There is no exponential backoff, no alert on dead-letter rows, and the worker is not yet a supervised Compose service.
+When a message exhausts its attempts the worker emits an ERROR-level failure alert through a
+`FailureAlerter` seam, so a permanent failure is never silent:
+
+```text
+ALERT outbox dead letter topic=submission.created key=submission:9:created attempts=3 error=ConnectionError: ...
+```
+
+Swapping either the transport or the alerter means adding one class that implements `NotificationTransport` or `FailureAlerter`.
+
+##### Webhook transport
+
+Set `NOTIFICATION_WEBHOOK_URL` and the worker posts each message to that endpoint; leave it unset and it falls back to a logging transport, so the repository ships with no credentials.
+
+```text
+POST <NOTIFICATION_WEBHOOK_URL>
+  X-Embedlead-Topic: submission.created
+  X-Embedlead-Idempotency-Key: submission:42:created
+  X-Embedlead-Signature: sha256=<hmac of the idempotency key>
+  {"topic": "...", "idempotency_key": "...", "payload": {"submission_id": 42, ...}}
+```
+
+A non-2xx response raises, so the worker counts an attempt and retries. The receiver should treat `X-Embedlead-Idempotency-Key` as the deduplication key, because delivery is at-least-once.
+
+When `NOTIFICATION_WEBHOOK_SECRET` is set, the signature is an HMAC-SHA256 of the idempotency key. The secret itself is never transmitted or logged, so a receiver can verify authenticity without it ever leaving either process.
+
+There is no SMTP transport, no exponential backoff, and no automatic replay of dead letters; the worker is also not yet a supervised Compose service.
 
 ## Reliability and security decisions
 

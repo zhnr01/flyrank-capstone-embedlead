@@ -59,6 +59,8 @@ class WidgetRepository(Protocol):
 
     def get_ownership(self, *, widget_id: int) -> WidgetOwnership | None: ...
 
+    def get_public(self, *, widget_id: int) -> Widget | None: ...
+
 
 class SqlAlchemyWidgetRepository:
     def __init__(self, session: Session) -> None:
@@ -159,6 +161,18 @@ class SqlAlchemyWidgetRepository:
             return None
         return WidgetOwnership(id=row.id, tenant_id=row.tenant_id)
 
+    def get_public(self, *, widget_id: int) -> Widget | None:
+        row = self._session.execute(
+            select(
+                WidgetRecord.id,
+                WidgetRecord.name,
+                WidgetRecord.kind,
+            ).where(WidgetRecord.id == widget_id)
+        ).one_or_none()
+        if row is None:
+            return None
+        return Widget(id=row.id, name=row.name, kind=row.kind)
+
     @staticmethod
     def _to_widget(record: WidgetRecord) -> Widget:
         return Widget(id=record.id, name=record.name, kind=record.kind)
@@ -228,4 +242,10 @@ class InMemoryWidgetRepository:
         for (tenant_id, stored_id) in self._widgets:
             if stored_id == widget_id:
                 return WidgetOwnership(id=widget_id, tenant_id=tenant_id)
+        return None
+
+    def get_public(self, *, widget_id: int) -> Widget | None:
+        for (_, stored_id), widget in self._widgets.items():
+            if stored_id == widget_id:
+                return widget
         return None

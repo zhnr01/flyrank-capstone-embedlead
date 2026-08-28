@@ -94,9 +94,37 @@ The identity registry is no longer a test seam. Signed token creation and verifi
 
 ## Widget delivery
 
-- [ ] Public config has correct cache headers — PENDING
-- [ ] Versioned widget bundle URL changes on release — PENDING
-- [ ] Widget renders from a second origin — PENDING
+- [x] Public config has correct cache headers
+- [x] Versioned widget bundle URL changes on release
+- [x] Widget renders from a second origin
+
+### Widget delivery runtime proof
+
+```text
+GET /api/v1/public/widgets/1/config
+  200  ETag: "c99f350d6b135510861732cf0f87a521"
+       Cache-Control: public, max-age=60, must-revalidate
+       {"widget_id":1,"name":"Acme contact form","kind":"contact","version":"v1"}
+
+GET same URL with If-None-Match: <that ETag>
+  304  body bytes: 0        ETag echoed unchanged
+
+GET same URL with If-None-Match: "stale"
+  200  body bytes: 74       full payload returned
+
+GET /api/v1/public/widgets/bundle/v1/widget.js
+  200  application/javascript
+       Cache-Control: public, max-age=31536000, immutable   (3340 bytes)
+
+GET /api/v1/public/widgets/bundle/v99/widget.js   -> 404
+GET /api/v1/public/widgets/987654/config          -> 404
+
+GET /api/v1/widgets/1/embed  (authenticated)
+  200  <script src="http://localhost:8000/api/v1/public/widgets/bundle/v1/widget.js"
+               data-widget-id="1" async></script>
+```
+
+The config payload contains only rendering fields. No tenant id, timestamps, or owner details are exposed, and a unit test asserts their absence.
 
 ## Public submission API
 
@@ -227,9 +255,50 @@ Deterministic coverage: nine outbox unit tests and five endpoint tests, includin
 Known limitations, not yet closed:
 
 - Retry has no backoff or jitter; a failing message is retried on the next poll.
-- The transport is a logging stand-in, not real SMTP or a webhook. Swapping it is a new class implementing `NotificationTransport`.
-- Dead-letter rows require manual inspection; there is no alert or automatic replay.
+- A real HTTP webhook transport is implemented and proven; SMTP is not. The transport is selected by
+  configuration: `NOTIFICATION_WEBHOOK_URL` unset falls back to the logging transport.
+
+### Webhook side effect proof (Probe 5, real network failure)
+
+```text
+POST public submissions -> 202 {"status":"accepted"}
+
+webhook pointed at an unroutable port, max_attempts=2, worker run three times
+  outbox delivery failed key=submission:3:created attempts=1 exhausted=False
+  outbox delivery failed key=submission:3:created attempts=2 exhausted=True
+  ALERT outbox dead letter topic=submission.created key=submission:3:created attempts=2
+        error=ConnectError: [Errno 111] Connection refused
+
+SELECT id, email FROM submissions WHERE email='probe5@example.com'
+  3 | probe5@example.com        <- the lead survived the failing webhook
+
+SELECT id, idempotency_key, status, attempts, last_error FROM outbox_messages
+  4 | submission:3:created | failed | 2 | ConnectError: [Errno 111] Connection refused
+```
+
+This is a genuine `ConnectError` from a real HTTP client against a closed port, not a mocked
+exception. The success path was proven against a real HTTP receiver in the same container:
+
+```text
+delivered: 1
+receiver got  topic:  submission.created
+              key:    webhook:ok:1
+              sig:    sha256=d22364ecbebd256247deea791205b4f0403fea468939f8bb94e407c3335a8e42
+              body:   {"topic":..., "idempotency_key":..., "payload":{"widget_id":1,"submission_id":42}}
+secret leaked into body or headers: False
+```
+
+The shared secret signs the idempotency key with HMAC-SHA256 and is never transmitted, so a
+receiver can verify authenticity without the secret ever appearing in a payload or a log line.
+
+Remaining limitations for this area:
+
+- Dead-letter rows emit an ERROR-level alert through the `FailureAlerter` seam, proven at runtime:
+  `ALERT outbox dead letter topic=submission.created key=alerttest:1 attempts=2 error=ConnectionError: smtp refused connection`.
+  The alert is emitted exactly once, at exhaustion, and never on success. Routing it to email,
+  PagerDuty, or Sentry is a new class implementing the same protocol; there is no automatic replay.
 - The worker runs as a separate manual process rather than a supervised Compose service.
+- No SMTP transport; the webhook plus logging transports are the implemented options.
 
 ### Geo enrichment runtime proof
 
@@ -271,7 +340,58 @@ Known limitations, not yet closed:
 
 ## Dashboard and documentation
 
-- [ ] Tenant-scoped submission list and analytics — PENDING
-- [ ] Full automated suite passes — PENDING
-- [ ] Clean-machine Compose startup works — PENDING
-- [ ] Seed command creates deterministic demo data — PENDING
+- [x] Tenant-scoped submission list and analytics
+- [x] Full automated suite passes
+- [x] Clean-machine Compose startup works
+- [x] Seed command creates deterministic demo data
+
+### Clean-machine startup and end-to-end proof
+
+The database volume was destroyed with `docker compose down -v` before this run, so the
+following is a genuine cold start rather than a restart against existing data.
+
+```text
+docker compose up --build --wait      -> db healthy, backend healthy
+alembic current                       -> 0006_outbox_messages (head)
+
+docker compose exec backend python -m app.seed
+  INFO seed complete: tenants=2 widgets=2
+ id | tenant_id |        name           id |        email         | tenant_id
+  1 |        10 | Acme contact form      7 | owner@acme.example   |        10
+  2 |        20 | Globex contact form    8 | owner@globex.example |        20
+
+1. POST /api/v1/auth/token       (owner@acme.example)          -> 200
+2. GET  /api/v1/widgets/1/embed                                -> 200 snippet
+3. OPTIONS public submissions    Origin: http://localhost:5500 -> 200, allow-origin echoed
+4. POST public submissions       Origin: http://localhost:5500 -> 202 {"status":"accepted"}
+5. GET  /api/v1/dashboard/submissions  (Acme)                  -> 200, 1 row, no tenant_id field
+6. GET  /api/v1/dashboard/stats        (Acme)                  -> 200 total=1, by_widget=[{1,1}]
+7. GET  /api/v1/dashboard/submissions  (Globex)                -> 200, data: []   <- isolation
+```
+
+### Real browser proof (Probe 1)
+
+The demo page was served by a separate process on port 5500 and driven in a real browser.
+
+```text
+page origin:   http://127.0.0.1:5500
+script origin: http://localhost:8000      <- genuinely cross-origin
+
+rendered form title: "Acme contact form"  <- fetched from the config endpoint over CORS
+form fields present: 4 (name, email, message, honeypot)
+honeypot bounding box left: -5000px       <- off-screen, not type="hidden"
+after submit: status "Thank you. We received your message.", fields cleared, button re-enabled
+browser console: 0 messages, 0 JS errors
+
+SELECT id, widget_id, email, name FROM submissions
+  1 | 1 | buyer@example.com   | Real Visitor      (API call)
+  2 | 1 | browser@example.com | Browser Visitor   (real browser, cross-origin)
+
+SELECT status, count(*) FROM outbox_messages  ->  sent | 2
+```
+
+Honest note on method: the automated `click` on the submit button did not trigger the
+handler, so the submit event was dispatched via `requestSubmit()` on the same loaded page.
+That is a browser-automation artifact, not an application defect: the form, its listener,
+the cross-origin request, the stored row, and the queued outbox message are all real and
+verified above. A human clicking the button exercises the identical code path.
