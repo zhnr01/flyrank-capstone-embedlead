@@ -5,14 +5,24 @@ from fastapi.testclient import TestClient
 from httpx import Response
 
 from app.api.membership_dependencies import get_membership_repository
+from app.api.outbox_dependencies import get_outbox_repository, get_unit_of_work
 from app.api.rate_limit_dependencies import reset_rate_limiters
+from app.api.submission_dependencies import get_submission_repository
 from app.api.widget_dependencies import get_widget_repository
 from app.core.config import settings
 from app.core.identity import Identity
 from app.core.widget_config import CONTACT_KIND, default_config
 from app.main import app
 from app.repositories.memberships import InMemoryMembershipRepository
+from app.repositories.outbox import InMemoryOutboxRepository
+from app.repositories.submissions import InMemorySubmissionRepository
 from app.repositories.widgets import InMemoryWidgetRepository
+
+
+class NoopUnitOfWork:
+    def commit(self) -> None:
+        return None
+
 
 TENANT_ID = 10
 USER_ID = 7
@@ -67,6 +77,11 @@ def _wiring() -> Generator[None]:
         config=default_config(),
     )
     app.dependency_overrides[get_widget_repository] = lambda: widgets
+    app.dependency_overrides[get_submission_repository] = (
+        lambda: InMemorySubmissionRepository()
+    )
+    app.dependency_overrides[get_outbox_repository] = lambda: InMemoryOutboxRepository()
+    app.dependency_overrides[get_unit_of_work] = lambda: NoopUnitOfWork()
     app.dependency_overrides[get_membership_repository] = lambda: (
         InMemoryMembershipRepository({USER_ID: TENANT_ID})
     )
