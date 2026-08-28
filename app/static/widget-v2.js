@@ -102,10 +102,7 @@
         var value = form.elements[field.name].value;
         body[field.name] = value === "" ? null : value;
       });
-      var trap = form.elements.website.value;
-      if (trap) {
-        body.website = trap;
-      }
+      body.website = form.elements.website.value;
 
       fetch(base + "/submissions", {
         method: "POST",

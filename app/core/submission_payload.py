@@ -72,5 +72,5 @@ def validate_against_config(
     trap = payload.get(HONEYPOT_FIELD)
     if isinstance(trap, str) and len(trap) > MAX_HONEYPOT_LENGTH:
         raise ValueError(f"{HONEYPOT_FIELD} is too long")
-    automated = isinstance(trap, str) and bool(trap.strip())
+    automated = trap is not None and (not isinstance(trap, str) or bool(trap.strip()))
     return SubmissionAnswers(values=values, looks_automated=automated)

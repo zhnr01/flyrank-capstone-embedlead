@@ -14,7 +14,7 @@ services:
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
-      - embedlead-db-data:/var/lib/postgresql
+      - embedlead-db-data:/var/lib/postgresql/18/docker
 
   redis:
     image: redis:8-alpine
@@ -73,18 +73,41 @@ services:
       METRICS_MAX_ROUTES: "64"
       REDIS_URL: "redis://redis:6379/0"
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     healthcheck:
       test:
         [
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/system/health/ready')",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/system/health/live')",
         ]
       interval: 5s
       timeout: 3s
       retries: 10
+
+  worker:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    environment:
+      ENVIRONMENT: local
+      POSTGRES_SERVER: db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: embedlead
+      POSTGRES_USER: embedlead
+      POSTGRES_PASSWORD: local-development-only
+      OUTBOX_MAX_ATTEMPTS: "3"
+      OUTBOX_POLL_SECONDS: "2.0"
+      LOG_LEVEL: "INFO"
+      REDIS_URL: "redis://redis:6379/0"
 
 volumes:
   embedlead-db-data:

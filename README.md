@@ -411,7 +411,7 @@ A non-2xx response raises, so the worker counts an attempt and retries. The rece
 
 When `NOTIFICATION_WEBHOOK_SECRET` is set, the signature is an HMAC-SHA256 of the idempotency key. The secret itself is never transmitted or logged, so a receiver can verify authenticity without it ever leaving either process.
 
-There is no SMTP transport, no exponential backoff, and no automatic replay of dead letters; the worker is also not yet a supervised Compose service.
+There is no SMTP transport, no exponential backoff, and no automatic replay of dead letters. The worker runs as a supervised `worker` service in Compose with `restart: unless-stopped`, so delivery does not depend on a human running a command.
 
 ## Reliability and security decisions
 
@@ -507,7 +507,7 @@ or the notification webhook.
 
 **Notification delivery is intentionally minimal.** Webhook only, fixed attempt budget, no
 exponential backoff, no SMTP transport, and no automatic dead-letter replay. The worker
-(`python -m app.worker`) is a documented command, not a supervised Compose service.
+(`python -m app.worker`) runs as a supervised `worker` Compose service, so delivery is automatic; the command remains available for one-shot runs with `--once`.
 
 **Index usage is unproven at demo data volume.** The composite widget index exists, and the
 dashboard time-series index is proven with `EXPLAIN (ANALYZE, BUFFERS)` at 50,000 rows

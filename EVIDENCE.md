@@ -1324,3 +1324,206 @@ f-string or concatenated SQL            0
 innerHTML in the embedded bundle        0 (textContent only)
 JWT algorithms=[HS256]                  pinned, so alg-confusion and alg:none both fail
 ```
+
+## Final review — delegated audits, and why every finding was re-verified
+
+Three read-only audits ran in parallel: security, architecture/ponytail, and ops/documentation.
+Their consolidated message never arrived, but all three had written completed results to disk, so
+the summaries were read directly rather than waiting.
+
+### Four of the security audit's claims were false
+
+This is the reason a subagent report is treated as a lead, not a fact.
+
+| Audit claim | Reality |
+|---|---|
+| MEDIUM: "rate-limit key derivation trusts client-supplied `X-Forwarded-For`, first value in the chain is taken" | **Fabricated.** `client_address` returns `request.client.host`; the string `forwarded` does not appear in `app/api/rate_limit_dependencies.py` at all, and `test_forwarded_header_cannot_bypass_the_ip_limit` already locks the property |
+| UNCOVERED: internal-detail leak in an error body | `tests/api/test_error_body_leaks.py`, **10 tests**, mutation-tested against a deliberately injected leak |
+| UNCOVERED: secret in output or logs | `test_sensitive_fields_are_redacted` and `test_metrics_token_is_never_written_to_a_log_line` |
+| UNCOVERED / MEDIUM: no dead-or-slow-dependency test | **five** exist, including `test_a_redis_outage_fails_open_onto_the_in_process_limiter` and `test_a_hanging_redis_is_bounded_by_the_health_timeout` |
+
+The child was reasoning from a pre-Unit-3 view of the tree. Had these been applied on trust, the
+result would have been re-implementing an XFF defence that already exists and writing four duplicate
+test files.
+
+### Six NON-ISSUEs independently confirmed
+
+Worth recording because a review that only lists faults is not a review:
+
+- JWT pinned to a single-element `algorithms=[HS256]` allowlist with verification on, so
+  `alg: none` and RS256->HS256 confusion both fail.
+- Tenant scoping enforced in the **repository/SQL** layer, not just the route: `tenant_id` is a
+  required parameter and lands in the `WHERE` clause.
+- No DOM-XSS sink in `app/static/widget-v2.js`; every tenant-controlled string goes through
+  `textContent`.
+- CORS is not load-bearing for authorization.
+- No SQL built by f-string or concatenation.
+- `.env` git-ignored and untracked; no secret-shaped literal in source.
+
+### The one real security finding: the honeypot was bypassable
+
+Verified before acting, and it reproduced:
+
+```text
+field FILLED (bot)         looks_automated=True
+field EMPTY (human)        looks_automated=False
+field ABSENT (smart bot)   looks_automated=False
+```
+
+`isinstance(trap, str) and bool(trap.strip())` means a bot that simply **omits** the `website` key
+looks exactly like a human. Only bots that blindly fill every input were caught.
+
+The obvious fix — treat absence as automated — is **wrong**, and the test suite proved it within one
+run:
+
+```text
+11 failed, 233 passed
+FAILED tests/api/test_submissions.py::test_valid_cross_origin_submission_is_accepted
+FAILED tests/api/test_submission_outbox.py::test_worker_delivers_enqueued_submission_once
+```
+
+Any legitimate client that omits the field gets classified as a bot. The widget bundle itself only
+sent `website` when non-empty (`app/static/widget-v2.js:105-108`), so real human submissions
+omitted it too. Reverting was the correct response to that evidence, not weakening the tests.
+
+Shipped instead:
+
+- the bundle now **always** sends the field (`body.website = form.elements.website.value`), so
+  presence is normal rather than exceptional;
+- a **non-string** trap value is now treated as automated — `{"website": 1}` previously slipped
+  through because `isinstance(trap, str)` short-circuited to `False`, which is a genuine bypass;
+- absence stays tolerated, because a third-party integrator posting directly to the API without the
+  field is a legitimate caller, not an attacker.
+
+```text
+uv run pytest tests/test_honeypot_presence.py
+6 passed
+```
+
+The remaining limitation is honest and now written down: a bot that sends `website: ""` defeats the
+honeypot. That is inherent to honeypots, which is why the brief asks for *at least one* spam control
+and the rate limiter carries the real load. Per-widget randomised field names would raise the cost,
+and are recorded as not implemented rather than implied.
+
+### Gates
+
+```text
+uv run pytest        244 passed, 12 skipped (256 total)
+uv run ruff check .  All checks passed!
+uv run mypy          Success: no issues found in 99 source files
+```
+
+## Final review — ops findings, and a CRITICAL that was not one
+
+The ops audit raised one CRITICAL, two HIGH, four MEDIUM and two LOW. Each was verified against the
+running stack before being acted on; one was wrong and one was wrong about severity.
+
+### The CRITICAL was a false alarm, disproved by experiment
+
+Claim: `embedlead-db-data:/var/lib/postgresql` mounts the parent of `PGDATA` rather than `PGDATA`
+itself, so "data does not persist".
+
+Both underlying facts were true:
+
+```text
+$ docker run --rm postgres:18-alpine sh -c 'echo $PGDATA'
+/var/lib/postgresql/18/docker
+
+$ docker inspect ...-db-1 --format '{{range .Mounts}}{{.Name}} -> {{.Destination}}{{end}}'
+volume ...embedlead-db-data -> /var/lib/postgresql
+```
+
+But the conclusion did not follow: `PGDATA` sits **inside** the mounted path, so it is on the volume.
+Tested rather than argued — write a row, destroy the containers, bring the database back:
+
+```text
+=== destroying containers, keeping the named volume ===
+ Container ...-db-1 Started
+db back in 1 tries
+=== did the row survive container removal? ===
+written before container removal
+=== are the seeded app tables still there? ===
+3
+```
+
+Data persisted. Had this been applied on trust as a CRITICAL data-loss bug, the "fix" would have
+been chasing a defect that did not exist.
+
+The audit had found something real, at MEDIUM rather than CRITICAL: the mount path is
+**version-coupled**. `PGDATA` contains the major version, so `postgres:19-alpine` would initialise a
+fresh empty cluster at `/var/lib/postgresql/19/docker` inside the same volume, silently leaving the
+old cluster behind — which looks exactly like total data loss to an operator. Pinning the mount to
+`PGDATA` makes a version bump fail loudly instead. Verified by destroying the volume entirely and
+replaying from empty:
+
+```text
+$ docker compose down -v          # Volume ...embedlead-db-data Removed
+$ docker compose up -d
+backend Up (healthy)   db Up (healthy)   redis Up (healthy)   worker Up
+$ psql -c 'select version_num from alembic_version'
+0009_submission_answers
+```
+
+### HIGH 1: the container healthcheck probed readiness
+
+`compose.yaml` health-checked `/health/ready`, which returns 503 on any database blip, combined with
+`restart: unless-stopped`. A transient DB hiccup would therefore mark the backend unhealthy and
+restart a process that was serving fine. Readiness answers "should traffic be routed here"; liveness
+answers "is this process alive" — and `app/services/health.py` already implements both separately.
+The healthcheck now targets `/health/live`.
+
+This is the same class as the Redis decision in Unit 3: a dependency's health must not be able to
+kill the container that depends on it.
+
+### HIGH 2: the outbox worker was not supervised
+
+`compose.yaml` defined three services and no worker, so notification delivery only happened when a
+human ran `python -m app.worker`. Every notification test passed, because they invoke the worker
+directly — the gap was in the shipped artifact, not the code.
+
+Now a supervised `worker` service with `restart: unless-stopped`, `depends_on` gating on db, redis
+and backend health, and a `command` override so it does not re-run `alembic upgrade head` from the
+shared image. Proven with no human intervention:
+
+```text
+$ curl -X POST .../widgets/1/submissions   -> 202
+
+$ psql -c 'select status, attempts from outbox_messages order by id desc limit 1'
+sent attempts=1
+
+worker-1 | INFO app.services.notifications notification delivered
+           topic=submission.created key=submission:1:created
+worker-1 | INFO app.worker outbox batch delivered=1
+```
+
+Two README claims became false the moment this landed and were corrected in the same commit.
+
+### MEDIUM: backend port was published on all interfaces
+
+`"8000:8000"` exposed the API to the LAN while `db` and `redis` were correctly loopback-bound —
+an inconsistency, not a considered decision. Now `127.0.0.1:8000:8000`.
+
+Side effect worth noting: this immediately collided with a leftover `hermes verify` uvicorn on
+`127.0.0.1:8000`, which the old `0.0.0.0` binding had silently tolerated. The stricter binding
+surfaced a conflict that was always there.
+
+### Deliberately not fixed, and why
+
+- **`Dockerfile` CMD couples `alembic upgrade head` to serving.** With N replicas each would attempt
+  the migration on boot. Alembic takes a lock, so the outcome is serialised rather than corrupt, and
+  the single-container topology this project documents cannot race. A separate init/job step is the
+  correct production answer and is recorded rather than implied.
+- **No `deploy.resources.limits` or logging caps.** Compose-level resource limits are ignored outside
+  swarm mode, and the project already states that cloud deployment is out of scope.
+- **Placeholder credentials inline in compose.** Already flagged in the README as
+  local-development-only, and `.env` is git-ignored.
+
+### Gates
+
+```text
+uv run pytest        256 passed
+uv run ruff check .  All checks passed!
+uv run mypy          Success: no issues found in 99 source files
+runtime              4/4 services healthy from an empty volume, 9 migrations replayed
+harness              HARNESS VERIFIED
+```
