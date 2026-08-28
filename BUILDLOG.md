@@ -660,3 +660,102 @@ outage path          8294ms -> 1001ms, bounded by config
 ```
 
 Transcripts in `EVIDENCE.md`.
+
+## Session 11 — final review: three parallel audits, five real defects
+
+Three read-only audits ran in parallel — security, ops/documentation, architecture/ponytail — and
+every finding was reproduced locally before anything changed. That discipline was the point of the
+session: 26 items reported, 5 real.
+
+### Concepts learned
+
+**A claim of absence is the weakest evidence there is.** Four of the security audit's "UNCOVERED"
+abuse cases had dedicated test files, one with ten mutation-tested cases. The child was reasoning
+from a pre-Unit-3 view of the tree, and a failed grep reads exactly like a proven gap. Claims of
+presence can be checked by opening the file; claims of absence require searching the way the author
+searched, which is much easier to get wrong.
+
+**CORS is a browser contract, not an authorization control.** Verified rather than assumed: a
+preflight from an unlisted origin gets no `Access-Control-Allow-Origin` header, and a direct `curl`
+from that same origin still gets `202`. Both are correct — an embeddable widget must accept posts
+from whatever site the tenant installed it on. The defect was documentation: the README never said
+so, and the endpoint's real defences (rate limiter, body-size guard, config validation, honeypot) are
+all origin-independent.
+
+**Readiness and liveness are not interchangeable, and the difference is load-bearing.** The container
+healthcheck probed readiness, so a transient database blip plus `restart: unless-stopped` would
+restart a backend that was serving fine. This is the second appearance of the same class — the first
+was Redis in Unit 3 — so it is now a rule: a dependency's health must never be able to kill its
+dependent.
+
+**`PGDATA` inside a mount is fine; the version in the path is not.** The volume covers
+`/var/lib/postgresql` while `PGDATA` is `/var/lib/postgresql/18/docker`. An audit called that
+CRITICAL data loss. Destroying the containers and reading the row back disproved it. The real risk is
+narrower and worth fixing anyway: `postgres:19` would initialise an empty cluster beside the old one
+inside the same volume, which looks like total data loss to an operator.
+
+### Mistakes and corrections
+
+**I shipped the obvious security fix and the suite rejected it.** The honeypot ignored an absent
+field, so a bot that omitted `website` looked human. Treating absence as automated broke 11 tests
+inside one run, because the widget bundle only sent the field when non-empty — genuine human
+submissions omitted it too. Reverting was the correct response to that evidence. The shipped fix
+makes presence normal (the bundle always sends the field) and closes the narrower real bypass: a
+non-string value like `{"website": 1}` short-circuited `isinstance` to `False` and sailed through.
+Weakening 11 tests to protect a guess would have shipped a false sense of security.
+
+**I nearly deleted the database password as dead config.** The audit's method reproduced cleanly —
+six `Settings` fields with no `settings.<field>` read anywhere. All six are read via `self` inside
+`config.py`, where the DSN is built. `postgres_password` is one of them. This is the single best
+argument in the project's history for verifying before acting.
+
+**The port fix surfaced a conflict the permissive binding had been hiding.** Changing
+`"8000:8000"` to `"127.0.0.1:8000:8000"` immediately failed to bind, because a leftover
+`hermes verify` uvicorn held loopback. The old binding tolerated the collision silently. Stricter
+configuration surfacing a latent problem is the fix working, not the fix breaking.
+
+### Decisions
+
+**Supervise the worker rather than document the command.** `compose.yaml` had three services and no
+worker, so notification delivery depended on a human running `python -m app.worker`. Every
+notification test passed because they invoke the worker directly — the gap lived in the shipped
+artifact. Now a `worker` service with `restart: unless-stopped`, `depends_on` gating on db, redis and
+backend health, and a `command` override so it does not re-run `alembic upgrade head` from the shared
+image. Proven with no human action: `202` in, `sent attempts=1` out, delivery logged.
+
+**Delete the redundant toggle, wire the missing ones.** Three env vars in `.env.example` had no
+`Settings` field and were silently discarded by `extra="ignore"`. `NOTIFICATIONS_ENABLED` duplicated
+a control that already exists (an empty `notification_webhook_url`), so it was deleted rather than
+given a second competing switch. The two geo toggles were genuinely absent, and Unit 4's rehearsal
+needs to kill provider A live, so they became real fields with a RED test first.
+
+**Keep `FailureAlerter` despite it looking like a `yagni` cut.** One Protocol, one implementation
+beside it, an `alerter or Default()` parameter — textbook over-engineering, except
+`tests/test_outbox.py` injects a `RecordingAlerter` to assert the dead-letter path without parsing
+logs. A Protocol whose second implementer is a test double is carrying weight.
+
+**Leave three ops findings unfixed, with reasons.** The Dockerfile couples migration to serving
+(alembic locks, and the documented topology is single-container), compose resource limits are ignored
+outside swarm mode, and the inline credentials are already documented as local-only placeholders.
+
+### Harness changes
+
+Doc/code drift was not one of the 15 enforced lanes, which is exactly why four false README claims
+survived a commit that ran every gate. `verify_harness.sh` gained three documentation-accuracy
+checks — every documented env var maps to a real settings field, no doc names a deleted setting, and
+the README may not assert in-process rate limiting or JSON metrics while the code says otherwise. All
+three fired on their first run. The drift guard is mutation-tested, and its first version only matched
+the exact sentence I had already fixed, which would have been theatre.
+
+### Verification
+
+```text
+uv run pytest        256 passed
+uv run ruff check .  All checks passed!
+uv run mypy          Success: no issues found in 99 source files
+runtime              4/4 services healthy from an empty volume, 9 migrations replayed
+                     supervised worker delivered with no human command
+harness              HARNESS VERIFIED
+```
+
+Full transcripts and the 26-item audit scorecard in `EVIDENCE.md`.

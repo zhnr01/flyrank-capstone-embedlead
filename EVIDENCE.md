@@ -1527,3 +1527,97 @@ uv run mypy          Success: no issues found in 99 source files
 runtime              4/4 services healthy from an empty volume, 9 migrations replayed
 harness              HARNESS VERIFIED
 ```
+
+## Final review — the architecture audit found nothing, and that is a result
+
+The third audit (over-engineering, dead code, layer violations) returned **no actionable finding**.
+Recorded because "nothing to cut" is a legitimate outcome, and because two of its claims were wrong
+in instructive ways.
+
+### What it confirmed
+
+- No `app.api` import inside `app/core` or `app/repositories`.
+- No `fastapi` or `starlette` import inside `app/core`.
+- Inward-only dependency direction holds at the import level.
+- The no-comments / no-docstrings house rule is respected across `app/` and `tests/`.
+
+The harness already gates all four, so this is independent agreement rather than new information.
+
+### Claim 1: "suppressions cluster at the storage and serialization boundary"
+
+```text
+$ grep -rn 'type: ignore|# noqa|cast(' app/ tests/ --include='*.py' | wc -l
+0
+```
+
+Zero. The claim is not merely unsupported, it is inverted: those suppressions **used to** exist and
+Unit 1 removed them by making `OutboxStatus`, `HealthStatus` and `WidgetKind` real `StrEnum`s with
+validated `*_from_stored` converters. `verify_harness.sh` now fails the build if one returns. The
+audit described the codebase as it was two commits ago.
+
+### Claim 2: six unread `Settings` fields, including `postgres_password`
+
+Reproducible with the audit's own method:
+
+```text
+UNREAD: environment
+UNREAD: postgres_server / postgres_port / postgres_db / postgres_user / postgres_password
+```
+
+All six are read — inside `config.py` itself, via `self`:
+
+```text
+app/core/config.py:58   if self.environment == "production" and self.secret_key.startswith(
+app/core/config.py:68   username=self.postgres_user,
+app/core/config.py:69   password=self.postgres_password,
+app/core/config.py:70   host=self.postgres_server,
+```
+
+A grep for `settings.<field>` cannot see a field consumed by the model that declares it. Deleting
+`postgres_password` as "dead config" would have broken every database connection in the project.
+This is the sharpest example so far of why a subagent finding is a lead and not a fact.
+
+### The one genuine lead, and why it survived
+
+`FailureAlerter` in `app/services/outbox_worker.py:11` is a `Protocol` referenced in only one file,
+with one implementation (`LoggingFailureAlerter`) beside it and an `alerter or Default()` parameter —
+the exact shape of a `yagni` cut.
+
+It stays, because there **is** a second implementation:
+
+```text
+tests/test_outbox.py:166   alerter = RecordingAlerter()
+tests/test_outbox.py:171   alerter=alerter,
+```
+
+`RecordingAlerter` is how the dead-letter path is asserted without reading log output. That is the
+same justification as the in-memory/SQLAlchemy repository pairs: a Protocol whose second implementer
+is a test double is carrying weight, not decorating.
+
+Checked every Protocol in the tree for the same question:
+
+```text
+UnitOfWork 2   GeoProvider 3   NotificationTransport 4   RateLimiterProtocol 2
+DashboardRepository 3   MembershipRepository 4   OutboxRepository 5
+SubmissionRepository 3   UserRepository 3   WidgetRepository 5   FailureAlerter 1
+```
+
+### Net result of the ponytail pass
+
+`net: 0 lines`. The 221-line metrics registry and the dead `SubmissionCreate` schema were already
+cut in Units 3 and 1 respectively, which is where the real bloat was. Two of the audit's four
+dead-code categories were generic assertions with no `file:line`, and the two that were concrete did
+not survive verification.
+
+### Scorecard across all three audits
+
+| Audit | Actionable | False or unverifiable | Verified NON-ISSUE |
+|---|---|---|---|
+| Security | 1 (honeypot bypass) | 4 | 6 |
+| Ops / docs | 4 (worker, healthcheck, PGDATA, port) | 1 CRITICAL disproved by experiment | — |
+| Architecture | 0 | 2 | 4 |
+
+Five real fixes out of twenty-six reported items. The delegation was still worth it — the honeypot
+bypass, the unsupervised worker and the readiness healthcheck are defects I had looked straight past
+— but a 5-in-26 signal rate is the argument for verifying every single claim against the code before
+touching anything.
