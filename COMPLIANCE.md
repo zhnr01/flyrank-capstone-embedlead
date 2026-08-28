@@ -104,7 +104,7 @@ Status values:
 | 5 | Idempotency where it matters — retried action happens once | DONE | Derived idempotency key with a database unique constraint; duplicate enqueue is a no-op, proven at runtime. |
 | 6 | Secrets clean — env only, never logged | DONE | `.env` ignored, `.env.example` placeholders, production rejects the development key. Webhook secret signs via HMAC and is never transmitted or logged, asserted by test. |
 | 7 | Cost tracked if AI is used | N/A | No AI feature in this system. |
-| 8 | Tests that matter — the scary cases, deterministic | DONE | 135 tests: auth, tenant isolation, CORS, oversized, abuse with an injected clock, provider failure, real webhook failure, caching/304, dashboard scoping, metrics auth and cardinality bounds. |
+| 8 | Tests that matter — the scary cases, deterministic | DONE | 137 tests: auth, tenant isolation, CORS, oversized, abuse with an injected clock, provider failure, real webhook failure, caching/304, dashboard scoping, metrics auth and cardinality bounds. Determinism verified by repeated full-suite runs, not assumed. |
 
 ## Observability (shared requirement: operators can see it working)
 
@@ -133,6 +133,7 @@ Status values:
 | README `Limitations` still claimed no widget, submission, auth, tenant, worker, or dashboard implementation existed | Directly contradicted the feature list in the same file | Fixed — rewritten to state the real operational limits |
 | Composite widget index exists but plan shows a sequential scan at six rows | Index usage unproven | Open — re-measure on realistic data |
 | Rate-limit counters and the metrics registry are in-process | Incorrect under horizontal scaling: limit becomes N x limit, metrics are per-instance | Open and documented — Redis required before multi-container |
+| `test_tampered_access_token_is_rejected` flipped a token's last base64url character | Flaky ~1 run in 16: a 43-char signature has 2 bits of encoding slack, so `Y`→`a` decodes byte-identically and the token was never actually tampered with | Fixed — tampering now mutates the payload (forged `sub`), plus new wrong-key and `alg: none` cases; determinism proven by 20 auth runs and 5 full-suite runs |
 
 ## Remaining build order
 

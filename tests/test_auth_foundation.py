@@ -1,5 +1,7 @@
+import base64
 from datetime import timedelta
 
+import jwt
 import pytest
 from jwt import InvalidTokenError
 
@@ -30,11 +32,34 @@ def test_access_token_round_trips_user_subject(monkeypatch: pytest.MonkeyPatch) 
 
 def test_tampered_access_token_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "secret_key", "test-only-key-with-at-least-32-bytes")
-    token = create_access_token("user-7", timedelta(minutes=5))
-    tampered = token[:-1] + ("a" if token[-1] != "a" else "b")
+    header, _, signature = create_access_token(
+        "user-7",
+        timedelta(minutes=5),
+    ).split(".")
+    forged = base64.urlsafe_b64encode(b'{"sub":"user-1","exp":9999999999}').rstrip(b"=")
+    tampered = f"{header}.{forged.decode()}.{signature}"
 
     with pytest.raises(InvalidTokenError):
         verify_access_token(tampered)
+
+
+def test_token_signed_with_another_key_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "secret_key", "attacker-key-with-at-least-32-bytes!")
+    forged = create_access_token("user-7", timedelta(minutes=5))
+    monkeypatch.setattr(settings, "secret_key", "test-only-key-with-at-least-32-bytes")
+
+    with pytest.raises(InvalidTokenError):
+        verify_access_token(forged)
+
+
+def test_unsigned_token_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "secret_key", "test-only-key-with-at-least-32-bytes")
+    unsigned = jwt.encode({"sub": "user-7", "exp": 9999999999}, "", algorithm="none")
+
+    with pytest.raises(InvalidTokenError):
+        verify_access_token(unsigned)
 
 
 def test_expired_access_token_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:

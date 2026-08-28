@@ -524,3 +524,52 @@ uv run ruff check .   -> All checks passed!
 uv run mypy           -> Success: no issues found in 77 source files
 uv run pytest         -> 135 passed
 ```
+
+### Test determinism proof
+
+`test_tampered_access_token_is_rejected` was flaky at roughly one run in sixteen. Measured
+cause, not guessed:
+
+```text
+last-char flip ACCEPTED by verifier: 0/2000   (with a random signature each time)
+signature length (base64url chars): 43
+bits encoded: 258 -> significant bits: 256, slack: 2
+
+legal final characters: AEIMQUYcgkosw048   (16 of 64)
+COLLIDING last chars: [('Y', 'a')]
+flake probability per run: 1/16
+  ...Y vs ...a: bytes identical after decode = True
+```
+
+The old test flipped the final base64url character. That character carries only four
+significant bits, so `Y` and `a` decode to the same byte — the "tampered" token was
+byte-identical to the original and was correctly accepted. The application code was never
+wrong.
+
+Tampering now mutates the payload, which has no encoding slack, and two attacks were added
+that the suite never covered:
+
+```text
+tests/test_auth_foundation.py
+  test_tampered_access_token_is_rejected          forged sub=user-1 against a user-7 signature
+  test_token_signed_with_another_key_is_rejected  correct structure, attacker's key
+  test_unsigned_token_is_rejected                 alg: none
+```
+
+Determinism verified by repetition rather than asserted:
+
+```text
+20 consecutive runs of tests/test_auth_foundation.py  -> 20 x 7 passed
+ 5 consecutive full-suite runs                        -> 137 passed, 137 passed,
+                                                         137 passed, 137 passed, 137 passed
+```
+
+Under the old code a flake was expected at least once across that many runs.
+
+### Gates (final)
+
+```text
+uv run ruff check .   -> All checks passed!
+uv run mypy           -> Success: no issues found in 77 source files
+uv run pytest         -> 137 passed
+```

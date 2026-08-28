@@ -252,3 +252,58 @@ found this; reading the code did not.
   limit becomes N x limit and each instance reports only its own slice.
 - Why reading `scope["route"]` is correct and re-running `route.matches()` is not.
 - Why `BaseHTTPMiddleware` cannot report the status of an exception it did not catch.
+
+## Session 6b — A flaky test was hiding a bad test
+
+Re-running the gates after the observability commit, `test_tampered_access_token_is_rejected`
+failed. It had passed minutes earlier, and it passed again when run alone. That combination
+is the signature of a flake, and a flake in a security test is worse than a red test: it
+teaches you to re-run until green.
+
+I measured instead of re-running. The test tampered with a token by flipping its **last
+character**:
+
+```python
+tampered = token[:-1] + ("a" if token[-1] != "a" else "b")
+```
+
+A 32-byte HMAC-SHA256 signature base64url-encodes to 43 characters. Those 43 characters
+carry 258 bits, but the signature is only 256 bits — so the final character contributes
+just 4 significant bits plus 2 bits of encoding slack. Only 16 of the 64 alphabet
+characters can legally appear last, and `Y` (index 24) and `a` (index 26) share the same
+top four bits.
+
+So when a signature happened to end in `Y`, replacing it with `a` produced a **byte-identical**
+signature after decoding. Proven by decoding both:
+
+```text
+COLLIDING last chars: [('Y', 'a')]
+flake probability per run: 1/16
+  ...Y vs ...a: bytes identical = True
+```
+
+The token was not tampered with at all, and `verify_access_token` was right to accept it.
+The application code was never wrong; the test's idea of "tamper" was. Roughly one run in
+sixteen, and I had been lucky for several sessions.
+
+The fix tampers with the **payload**, which is JSON with no encoding slack, so the mutation
+is always real: a forged `sub` claiming `user-1` against a signature for `user-7`. That also
+tests something more meaningful than bit-flipping — privilege escalation by claim
+substitution.
+
+While there I added the two attacks the original suite never covered: a token correctly
+signed with a *different* key, and an `alg: none` unsigned token. The second matters
+because accepting `alg: none` is a classic JWT vulnerability, and nothing previously
+asserted that we reject it.
+
+Verified determinism rather than assuming it: 20 consecutive runs of the auth module and 5
+consecutive full-suite runs, all green (137 tests). Under the old code the flake would have
+been expected to appear at least once in that many runs.
+
+### What I must be able to explain
+
+- Why a 43-character base64url signature has 2 bits of slack, and why that makes
+  last-character mutation an unreliable way to corrupt it.
+- Why a flaky security test is more dangerous than a failing one.
+- Why mutating the payload is both deterministic and a better test than mutating the signature.
+- Why `alg: none` must be rejected, and why an algorithm allowlist is the defence.
