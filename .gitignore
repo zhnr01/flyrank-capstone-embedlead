@@ -6,6 +6,25 @@
 /docs/learning/
 /*-learning/
 
+# Agent harness — build-time only, NOT part of the capstone submission pack.
+# The brief (section 11) requires: README.md, capstone.yaml, EVIDENCE.md,
+# BUILDLOG.md, .env.example (+ LICENSE). Everything below is private tooling.
+# docs/DESIGN.md is deliberately NOT ignored: it is a public project document.
+/AGENTS.md
+/CLAUDE.md
+/PROMPT.md
+/docs/architecture.md
+/docs/rules.md
+/docs/specs.md
+/docs/learnings.md
+/docs/blocked.md
+/docs/tech-debt-tracker.md
+/docs/decisions.md
+/docs/arch-*.md
+/tasks/
+/logs/
+/.hermes/
+
 # Secrets and local overrides
 .env
 .env.*
@@ -29,3 +48,4 @@ dist/
 .vscode/
 .idea/
 .DS_Store
+/scripts/verify_harness.sh
