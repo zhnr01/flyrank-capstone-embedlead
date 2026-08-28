@@ -1621,3 +1621,99 @@ Five real fixes out of twenty-six reported items. The delegation was still worth
 bypass, the unsupervised worker and the readiness healthcheck are defects I had looked straight past
 — but a 5-in-26 signal rate is the argument for verifying every single claim against the code before
 touching anything.
+
+## Final review, second pass — the delegation replay, and one real bound added
+
+The consolidated audit message arrived after the findings had already been processed from disk. Two
+claims in its tail had not been checked, and both were worth chasing.
+
+### The BLOCKING claim was true when written and false at HEAD
+
+> "BLOCKING for a clean clone: `app/core/config.py`, `app/api/geo_dependencies.py` and
+> `app/core/geo.py` are uncommitted and `tests/test_geo_toggles.py` is untracked; at HEAD,
+> `geo_dependencies.py:18-21` reads `settings.geo_provider_a_enabled` which does not exist, so a
+> fresh clone would fail at import."
+
+That was accurate at the moment the audit ran — those files were in my working tree mid-edit. Commit
+`714126d` landed them. Rather than reason about it, a real clone from GitHub settled it:
+
+```text
+=== HEAD ===
+ee1a16c docs(review): record the audit scorecard and the lessons it forced
+=== do the files the audit called uncommitted exist at HEAD? ===
+  PRESENT app/core/config.py
+  PRESENT app/api/geo_dependencies.py
+  PRESENT app/core/geo.py
+  PRESENT tests/test_geo_toggles.py
+=== does the setting the audit said is absent exist? ===
+1
+=== can the app be imported from a clean clone? ===
+app.main imported OK
+=== full suite on the clean clone ===
+244 passed, 12 skipped
+```
+
+A fresh clone imports and tests clean. The 12 skips are the real-PostgreSQL tests, correctly skipping
+where no database exists.
+
+Worth keeping as a lesson about delegation: a long-running audit reads a **snapshot**, so any finding
+about uncommitted state expires the moment the next commit lands. Timestamps matter as much as
+severity.
+
+### The unbounded `method` label: real in code, unreachable over HTTP
+
+`app/api/request_context.py:84` passed `str(scope["method"])` straight through, and unlike `route`
+(bounded by `_bounded_route`) and `status_code` (bounded by `status_class`), nothing constrained it.
+That is the same cardinality-bomb shape the project already fixed once for concrete paths.
+
+Before fixing it, the question that decides severity: can a client actually inject an arbitrary verb?
+Curl refuses to send unknown methods, so the first probe proved nothing. A raw socket answered it:
+
+```text
+$ printf 'FOOBAR /api/v1/system/health/live HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n' | (raw socket)
+server replied to bogus verb FOOBAR:
+HTTP/1.1 400 Bad Request
+--- did the app log the bogus verb at all? ---
+0
+
+distinct method labels in /metrics after 8 bogus verbs: ['GET']
+```
+
+uvicorn's h11 parser rejects the verb at the protocol layer and never invokes the ASGI app, so the
+middleware never sees it. **Not exploitable over HTTP** — which is why this is defence in depth
+rather than a vulnerability fix.
+
+Bounded anyway, because it costs three lines and the guarantee should not depend on which server is
+in front of the app:
+
+```text
+uv run pytest tests/test_method_cardinality.py
+5 passed
+```
+
+`bounded_method` allow-lists the nine RFC verbs, normalises case (`get` -> `GET` rather than
+overflow), and collapses anything else into the existing `other` label. Every observation is still
+counted — the test asserts three unknown verbs produce one series with value 3, so the bound loses no
+data, only distinctness.
+
+### Scorecard, final
+
+| Audit | Actionable | False, expired, or unverifiable | Verified NON-ISSUE |
+|---|---|---|---|
+| Security | 2 (honeypot bypass, method label) | 4 | 6 |
+| Ops / docs | 4 (worker, healthcheck, PGDATA, port) | 2 (CRITICAL disproved, BLOCKING expired) | — |
+| Architecture | 0 | 2 | 4 |
+
+Six real fixes from 28 reported items. Two of the six were things I had looked straight past, and two
+of the false claims would have caused damage if applied on trust: re-implementing an
+`X-Forwarded-For` defence that already exists, and deleting `postgres_password` as dead config.
+
+### Gates
+
+```text
+uv run pytest        261 passed
+uv run ruff check .  All checks passed!
+uv run mypy          Success: no issues found in 100 source files
+harness              HARNESS VERIFIED
+clean clone          imports, 244 passed / 12 skipped
+```

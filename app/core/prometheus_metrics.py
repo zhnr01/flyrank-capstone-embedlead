@@ -4,6 +4,17 @@ from app.core.config import settings
 
 LATENCY_BUCKETS_SECONDS = (0.005, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0)
 STATUS_CLASSES = ("1xx", "2xx", "3xx", "4xx", "5xx")
+HTTP_METHODS = (
+    "GET",
+    "HEAD",
+    "POST",
+    "PUT",
+    "PATCH",
+    "DELETE",
+    "OPTIONS",
+    "TRACE",
+    "CONNECT",
+)
 OVERFLOW_LABEL = "other"
 METRIC_PREFIX = "embedlead"
 
@@ -11,6 +22,11 @@ METRIC_PREFIX = "embedlead"
 def status_class(status_code: int) -> str:
     bucket = f"{status_code // 100}xx"
     return bucket if bucket in STATUS_CLASSES else OVERFLOW_LABEL
+
+
+def bounded_method(method: str) -> str:
+    normalised = method.upper()
+    return normalised if normalised in HTTP_METHODS else OVERFLOW_LABEL
 
 
 class PrometheusMetrics:
@@ -56,10 +72,11 @@ class PrometheusMetrics:
         duration_seconds: float,
     ) -> None:
         bounded = self._bounded_route(route)
+        verb = bounded_method(method)
         self._requests.labels(
-            method=method, route=bounded, status_class=status_class(status_code)
+            method=verb, route=bounded, status_class=status_class(status_code)
         ).inc()
-        self._latency.labels(method=method, route=bounded).observe(duration_seconds)
+        self._latency.labels(method=verb, route=bounded).observe(duration_seconds)
 
     def increment(self, name: str, outcome: str) -> None:
         self._events.labels(name=name, outcome=outcome).inc()
