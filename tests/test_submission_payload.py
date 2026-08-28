@@ -2,6 +2,7 @@ import pytest
 
 from app.core.submission_payload import (
     MAX_ANSWER_LENGTHS,
+    MAX_HONEYPOT_LENGTH,
     SubmissionAnswers,
     validate_against_config,
 )
@@ -126,3 +127,15 @@ def test_answers_are_a_plain_mapping_safe_to_store() -> None:
 
     assert isinstance(answers, SubmissionAnswers)
     assert set(answers.values) <= {"email", "company", "phone"}
+
+
+def test_an_oversized_honeypot_is_rejected() -> None:
+    with pytest.raises(ValueError, match="website"):
+        validate_against_config(
+            {
+                "email": "a@example.com",
+                "company": "Acme",
+                "website": "x" * (MAX_HONEYPOT_LENGTH + 1),
+            },
+            config=CUSTOM,
+        )

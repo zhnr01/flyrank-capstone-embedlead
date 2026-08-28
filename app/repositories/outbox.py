@@ -5,7 +5,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.outbox import OutboxMessage
+from app.core.outbox import (
+    OutboxMessage,
+    OutboxStatus,
+    OutboxTopic,
+    status_from_stored,
+)
 from app.models import OutboxMessageRecord
 
 
@@ -13,7 +18,7 @@ class OutboxRepository(Protocol):
     def enqueue(
         self,
         *,
-        topic: str,
+        topic: OutboxTopic,
         idempotency_key: str,
         payload: dict[str, object],
     ) -> OutboxMessage | None: ...
@@ -38,7 +43,7 @@ def to_message(record: OutboxMessageRecord) -> OutboxMessage:
         topic=record.topic,
         idempotency_key=record.idempotency_key,
         payload=dict(record.payload),
-        status=record.status,  # type: ignore[arg-type]
+        status=status_from_stored(record.status),
         attempts=record.attempts,
         last_error=record.last_error,
         created_at=record.created_at,
@@ -52,7 +57,7 @@ class SqlAlchemyOutboxRepository:
     def enqueue(
         self,
         *,
-        topic: str,
+        topic: OutboxTopic,
         idempotency_key: str,
         payload: dict[str, object],
     ) -> OutboxMessage | None:
@@ -60,7 +65,7 @@ class SqlAlchemyOutboxRepository:
             topic=topic,
             idempotency_key=idempotency_key,
             payload=payload,
-            status="pending",
+            status=OutboxStatus.PENDING,
             attempts=0,
         )
         savepoint = self._session.begin_nested()
@@ -76,7 +81,7 @@ class SqlAlchemyOutboxRepository:
     def claim_pending(self, *, limit: int) -> list[OutboxMessage]:
         statement = (
             select(OutboxMessageRecord)
-            .where(OutboxMessageRecord.status == "pending")
+            .where(OutboxMessageRecord.status == OutboxStatus.PENDING)
             .order_by(OutboxMessageRecord.id)
             .limit(limit)
             .with_for_update(skip_locked=True)
@@ -88,7 +93,7 @@ class SqlAlchemyOutboxRepository:
         record = self._session.get(OutboxMessageRecord, message_id)
         if record is None:
             return
-        record.status = "sent"
+        record.status = OutboxStatus.SENT
         record.attempts = attempts
         record.last_error = None
         self._session.commit()
@@ -104,7 +109,9 @@ class SqlAlchemyOutboxRepository:
         record = self._session.get(OutboxMessageRecord, message_id)
         if record is None:
             return
-        record.status = "failed" if exhausted else "pending"
+        record.status = (
+            OutboxStatus.FAILED if exhausted else OutboxStatus.PENDING
+        )
         record.attempts = attempts
         record.last_error = error
         self._session.commit()
@@ -119,7 +126,7 @@ class InMemoryOutboxRepository:
     def enqueue(
         self,
         *,
-        topic: str,
+        topic: OutboxTopic,
         idempotency_key: str,
         payload: dict[str, object],
     ) -> OutboxMessage | None:
@@ -131,15 +138,19 @@ class InMemoryOutboxRepository:
             topic=topic,
             idempotency_key=idempotency_key,
             payload=payload,
-            status="pending",
+            status=OutboxStatus.PENDING,
             attempts=0,
         )
         self._messages[message.id] = message
         return message
 
     def claim_pending(self, *, limit: int) -> list[OutboxMessage]:
-        pending = [m for m in self._messages.values() if m.status == "pending"]
-        pending.sort(key=lambda m: m.id)
+        pending = [
+            message
+            for message in self._messages.values()
+            if message.status == OutboxStatus.PENDING
+        ]
+        pending.sort(key=lambda message: message.id)
         return pending[:limit]
 
     def mark_sent(self, message_id: int, *, attempts: int) -> None:
@@ -149,7 +160,7 @@ class InMemoryOutboxRepository:
             topic=message.topic,
             idempotency_key=message.idempotency_key,
             payload=message.payload,
-            status="sent",
+            status=OutboxStatus.SENT,
             attempts=attempts,
             last_error=None,
         )
@@ -168,7 +179,9 @@ class InMemoryOutboxRepository:
             topic=message.topic,
             idempotency_key=message.idempotency_key,
             payload=message.payload,
-            status="failed" if exhausted else "pending",
+            status=(
+                OutboxStatus.FAILED if exhausted else OutboxStatus.PENDING
+            ),
             attempts=attempts,
             last_error=error,
         )

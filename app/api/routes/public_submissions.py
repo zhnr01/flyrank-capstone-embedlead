@@ -13,7 +13,7 @@ from app.api.submission_dependencies import SubmissionRepositoryDep
 from app.api.widget_dependencies import WidgetRepositoryDep
 from app.core.geo import GeoLocation, GeoProviderChain
 from app.core.metrics import increment
-from app.core.outbox import submission_created_key
+from app.core.outbox import SUBMISSION_CREATED_TOPIC, submission_created_key
 from app.core.submission_payload import validate_against_config
 
 logger = logging.getLogger(__name__)
@@ -94,7 +94,7 @@ def create_submission(
         answers=answers.values,
     )
     outbox.enqueue(
-        topic="submission.created",
+        topic=SUBMISSION_CREATED_TOPIC,
         idempotency_key=submission_created_key(submission.id),
         payload={
             "submission_id": submission.id,

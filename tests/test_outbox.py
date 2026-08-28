@@ -1,6 +1,10 @@
 import pytest
 
-from app.core.outbox import OutboxMessage, submission_created_key
+from app.core.outbox import (
+    OutboxMessage,
+    OutboxStatus,
+    submission_created_key,
+)
 from app.repositories.outbox import InMemoryOutboxRepository
 from app.services.outbox_worker import OutboxWorker
 
@@ -57,7 +61,7 @@ def test_enqueue_creates_one_pending_message() -> None:
 
     pending = repository.claim_pending(limit=10)
     assert len(pending) == 1
-    assert pending[0].status == "pending"
+    assert pending[0].status == OutboxStatus.PENDING
     assert pending[0].attempts == 0
     assert pending[0].payload == {"submission_id": 1}
 
@@ -93,7 +97,7 @@ def test_worker_delivers_and_marks_sent() -> None:
     assert processed == 1
     assert transport.sent == ["submission:5:created"]
     message = repository.all_messages()[0]
-    assert message.status == "sent"
+    assert message.status == OutboxStatus.SENT
     assert message.attempts == 1
 
 
@@ -126,7 +130,7 @@ def test_failing_transport_keeps_message_pending_and_counts_attempts() -> None:
     worker.run_once()
 
     message = repository.all_messages()[0]
-    assert message.status == "pending"
+    assert message.status == OutboxStatus.PENDING
     assert message.attempts == 1
     assert message.last_error is not None
     assert "ConnectionError" in message.last_error
@@ -147,7 +151,7 @@ def test_exhausted_attempts_move_message_to_dead_letter() -> None:
     worker.run_once()
 
     message = repository.all_messages()[0]
-    assert message.status == "failed"
+    assert message.status == OutboxStatus.FAILED
     assert message.attempts == 2
     assert transport.attempts == 2
 

@@ -6,7 +6,7 @@ from sqlalchemy.pool import QueuePool
 
 from app.core.db import database_connect_args, engine
 from app.main import app
-from app.services.health import DependencyHealth, database_health
+from app.services.health import DependencyHealth, HealthStatus, database_health
 
 client = TestClient(app)
 
@@ -24,14 +24,14 @@ def test_liveness_openapi_allows_only_healthy_status() -> None:
         "status"
     ]
 
-    assert status_schema["const"] == "healthy"
+    assert status_schema["const"] == HealthStatus.HEALTHY
 
 
 def test_readiness_returns_healthy_when_database_is_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def healthy_database() -> DependencyHealth:
-        return DependencyHealth(status="healthy", response_time_ms=1.25)
+        return DependencyHealth(status=HealthStatus.HEALTHY, response_time_ms=1.25)
 
     monkeypatch.setattr("app.services.health.database_health", healthy_database)
 
@@ -55,7 +55,7 @@ def test_readiness_returns_safe_503_when_database_is_unavailable(
 ) -> None:
     async def unavailable_database() -> DependencyHealth:
         return DependencyHealth(
-            status="unhealthy",
+            status=HealthStatus.UNHEALTHY,
             response_time_ms=4.5,
             error="OperationalError",
         )
@@ -96,6 +96,6 @@ def test_database_health_converts_probe_failure_to_safe_report(
 
     report = asyncio.run(database_health())
 
-    assert report.status == "unhealthy"
+    assert report.status == HealthStatus.UNHEALTHY
     assert report.error == "RuntimeError"
     assert "secret database details" not in report.model_dump_json()

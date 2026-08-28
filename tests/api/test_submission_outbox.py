@@ -12,7 +12,7 @@ from app.api.submission_dependencies import get_submission_repository
 from app.api.widget_dependencies import get_widget_repository
 from app.core.auth import create_access_token
 from app.core.geo import GeoProviderChain
-from app.core.outbox import OutboxMessage
+from app.core.outbox import SUBMISSION_CREATED_TOPIC, OutboxMessage, OutboxStatus
 from app.main import app
 from app.repositories.memberships import InMemoryMembershipRepository
 from app.repositories.outbox import InMemoryOutboxRepository
@@ -100,8 +100,8 @@ def test_submission_enqueues_exactly_one_message(stores: Stores) -> None:
 
     messages = outbox.all_messages()
     assert len(messages) == 1
-    assert messages[0].topic == "submission.created"
-    assert messages[0].status == "pending"
+    assert messages[0].topic == SUBMISSION_CREATED_TOPIC
+    assert messages[0].status == OutboxStatus.PENDING
     stored_id = submissions.all_for_tenant(10)[0].id
     assert messages[0].idempotency_key == f"submission:{stored_id}:created"
     assert messages[0].payload["submission_id"] == stored_id
@@ -134,7 +134,7 @@ def test_transport_failure_never_loses_the_submission(stores: Stores) -> None:
     assert stored[0].email == "durable@example.com"
 
     message = outbox.all_messages()[0]
-    assert message.status == "failed"
+    assert message.status == OutboxStatus.FAILED
     assert message.last_error is not None
     assert "ConnectionError" in message.last_error
 
@@ -150,7 +150,7 @@ def test_worker_delivers_enqueued_submission_once(stores: Stores) -> None:
     worker.run_once()
 
     assert len(transport.delivered) == 1
-    assert outbox.all_messages()[0].status == "sent"
+    assert outbox.all_messages()[0].status == OutboxStatus.SENT
 
 
 def test_honeypot_submission_enqueues_nothing(stores: Stores) -> None:

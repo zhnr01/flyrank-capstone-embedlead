@@ -2,19 +2,33 @@ from dataclasses import dataclass, replace
 from itertools import count
 from typing import Protocol
 
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.identity import Identity
-from app.core.widget_config import WidgetConfig, WidgetKind, default_config
+from app.core.widget_config import (
+    CONTACT_KIND,
+    WidgetConfig,
+    WidgetKind,
+    default_config,
+    kind_from_stored,
+)
 from app.models import WidgetRecord
+
+
+def kind_or_default(stored: str) -> WidgetKind:
+    try:
+        return kind_from_stored(stored)
+    except ValueError:
+        return CONTACT_KIND
 
 
 @dataclass(frozen=True)
 class Widget:
     id: int
     name: str
-    kind: str
+    kind: WidgetKind
     config: WidgetConfig
 
 
@@ -33,7 +47,10 @@ class WidgetPage:
 def config_from_stored(stored: object) -> WidgetConfig:
     if not isinstance(stored, dict):
         return default_config()
-    return WidgetConfig.model_validate(stored)
+    try:
+        return WidgetConfig.model_validate(stored)
+    except ValidationError:
+        return default_config()
 
 
 class WidgetRepository(Protocol):
@@ -202,7 +219,7 @@ class SqlAlchemyWidgetRepository:
         return Widget(
             id=row.id,
             name=row.name,
-            kind=row.kind,
+            kind=kind_or_default(row.kind),
             config=config_from_stored(row.config),
         )
 
@@ -211,7 +228,7 @@ class SqlAlchemyWidgetRepository:
         return Widget(
             id=record.id,
             name=record.name,
-            kind=record.kind,
+            kind=kind_or_default(record.kind),
             config=config_from_stored(record.config),
         )
 

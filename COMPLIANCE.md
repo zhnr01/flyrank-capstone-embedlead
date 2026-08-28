@@ -104,7 +104,7 @@ Status values:
 | 5 | Idempotency where it matters — retried action happens once | DONE | Derived idempotency key with a database unique constraint; duplicate enqueue is a no-op, proven at runtime. |
 | 6 | Secrets clean — env only, never logged | DONE | `.env` ignored, `.env.example` placeholders, production rejects the development key. Webhook secret signs via HMAC and is never transmitted or logged, asserted by test. |
 | 7 | Cost tracked if AI is used | N/A | No AI feature in this system. |
-| 8 | Tests that matter — the scary cases, deterministic | DONE | 196 tests: auth, tenant isolation, CORS, oversized, abuse with an injected clock, provider failure, real webhook failure, caching/304, dashboard scoping, metrics auth and cardinality bounds. Determinism verified by repeated full-suite runs, not assumed. |
+| 8 | Tests that matter — the scary cases, deterministic | DONE | 212 tests: auth, tenant isolation, CORS, oversized, abuse with an injected clock, provider failure, real webhook failure, caching/304, dashboard scoping, metrics auth and cardinality bounds. Determinism verified by repeated full-suite runs, not assumed. |
 
 ## Observability (shared requirement: operators can see it working)
 

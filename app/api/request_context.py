@@ -3,6 +3,7 @@ import uuid
 from collections.abc import Iterable
 from typing import Any
 
+from starlette import status
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.logging_config import request_id_var
@@ -12,7 +13,6 @@ REQUEST_ID_HEADER = "x-request-id"
 MAX_REQUEST_ID_LENGTH = 64
 REQUEST_ID_ALLOWED_PUNCTUATION = "-_."
 UNMATCHED_ROUTE = "unmatched"
-SERVER_ERROR_STATUS = 500
 
 
 def safe_request_id(raw: str | None) -> str:
@@ -66,7 +66,7 @@ class RequestContextMiddleware:
         request_id = safe_request_id(incoming_request_id(scope))
         token = request_id_var.set(request_id)
         started = time.perf_counter()
-        status_code = SERVER_ERROR_STATUS
+        status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
 
         async def send_with_request_id(message: Message) -> None:
             nonlocal status_code

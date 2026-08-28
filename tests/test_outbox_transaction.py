@@ -5,7 +5,11 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.outbox import submission_created_key
+from app.core.outbox import (
+    SUBMISSION_CREATED_TOPIC,
+    OutboxStatus,
+    submission_created_key,
+)
 from app.models import (
     Base,
     OutboxMessageRecord,
@@ -87,16 +91,20 @@ def test_duplicate_key_does_not_destroy_the_uncommitted_submission(
 
     session.add(
         OutboxMessageRecord(
-            topic=TOPIC,
+            topic=SUBMISSION_CREATED_TOPIC,
             idempotency_key=key,
             payload={},
-            status="pending",
+            status=OutboxStatus.PENDING,
             attempts=0,
         )
     )
     session.flush()
 
-    duplicate = outbox.enqueue(topic=TOPIC, idempotency_key=key, payload={})
+    duplicate = outbox.enqueue(
+        topic=SUBMISSION_CREATED_TOPIC,
+        idempotency_key=key,
+        payload={},
+    )
     session.flush()
 
     assert duplicate is None
@@ -108,8 +116,16 @@ def test_duplicate_key_leaves_exactly_one_outbox_row(session: Session) -> None:
     submission_id = store_lead(session, "once@example.com")
     key = submission_created_key(submission_id)
 
-    first = outbox.enqueue(topic=TOPIC, idempotency_key=key, payload={"n": 1})
-    second = outbox.enqueue(topic=TOPIC, idempotency_key=key, payload={"n": 2})
+    first = outbox.enqueue(
+        topic=SUBMISSION_CREATED_TOPIC,
+        idempotency_key=key,
+        payload={"n": 1},
+    )
+    second = outbox.enqueue(
+        topic=SUBMISSION_CREATED_TOPIC,
+        idempotency_key=key,
+        payload={"n": 2},
+    )
     session.flush()
 
     assert first is not None
@@ -125,12 +141,12 @@ def test_session_stays_usable_after_a_duplicate(session: Session) -> None:
     outbox = SqlAlchemyOutboxRepository(session)
     first_id = store_lead(session, "first@example.com")
     key = submission_created_key(first_id)
-    outbox.enqueue(topic=TOPIC, idempotency_key=key, payload={})
-    outbox.enqueue(topic=TOPIC, idempotency_key=key, payload={})
+    outbox.enqueue(topic=SUBMISSION_CREATED_TOPIC, idempotency_key=key, payload={})
+    outbox.enqueue(topic=SUBMISSION_CREATED_TOPIC, idempotency_key=key, payload={})
 
     second_id = store_lead(session, "second@example.com")
     outbox.enqueue(
-        topic=TOPIC,
+        topic=SUBMISSION_CREATED_TOPIC,
         idempotency_key=submission_created_key(second_id),
         payload={},
     )
@@ -168,10 +184,26 @@ def test_both_implementations_agree_on_duplicate_enqueue(session: Session) -> No
     )
     key = submission_created_key(sql_id)
 
-    sql_first = sql_outbox.enqueue(topic=TOPIC, idempotency_key=key, payload={})
-    sql_second = sql_outbox.enqueue(topic=TOPIC, idempotency_key=key, payload={})
-    memory_first = memory_outbox.enqueue(topic=TOPIC, idempotency_key=key, payload={})
-    memory_second = memory_outbox.enqueue(topic=TOPIC, idempotency_key=key, payload={})
+    sql_first = sql_outbox.enqueue(
+        topic=SUBMISSION_CREATED_TOPIC,
+        idempotency_key=key,
+        payload={},
+    )
+    sql_second = sql_outbox.enqueue(
+        topic=SUBMISSION_CREATED_TOPIC,
+        idempotency_key=key,
+        payload={},
+    )
+    memory_first = memory_outbox.enqueue(
+        topic=SUBMISSION_CREATED_TOPIC,
+        idempotency_key=key,
+        payload={},
+    )
+    memory_second = memory_outbox.enqueue(
+        topic=SUBMISSION_CREATED_TOPIC,
+        idempotency_key=key,
+        payload={},
+    )
     session.flush()
 
     assert (sql_first is None) == (memory_first is None)

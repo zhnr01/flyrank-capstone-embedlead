@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.auth import get_password_hash
 from app.core.db import engine
-from app.core.widget_config import default_config
+from app.core.widget_config import CONTACT_KIND, default_config
 from app.models import MembershipRecord, TenantRecord, UserRecord, WidgetRecord
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -16,8 +16,8 @@ DEMO_PASSWORD = "local-demo-password"
 DEMO_TENANTS = [(10, "Acme Coffee"), (20, "Globex Tools")]
 DEMO_USERS = [(7, "owner@acme.example", 10), (8, "owner@globex.example", 20)]
 DEMO_WIDGETS = [
-    (1, 10, "Acme contact form", "contact"),
-    (2, 20, "Globex contact form", "contact"),
+    (1, 10, "Acme contact form", CONTACT_KIND),
+    (2, 20, "Globex contact form", CONTACT_KIND),
 ]
 
 

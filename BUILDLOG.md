@@ -470,3 +470,97 @@ migrations           9 of 9 replayed on an empty database
 ```
 
 Transcripts in `EVIDENCE.md`.
+
+## Session 9 — Unit 1: naming, magic literals, and the abuse case nobody had tested
+
+Two delegated research passes fed this unit: a magic-literal audit and a security audit that
+walked nine abuse cases. Research only — both subagents were read-only and every finding was
+re-verified against the code before anything changed. One turned out to be already fixed, which
+is exactly why the verification step exists.
+
+### Concept learned
+
+**A `Literal` alias that nothing enforces is documentation, not a type.** `OutboxStatus` and the
+health-status `Literal` both already existed. They were bypassed by bare strings and, in one
+place, by a `# type: ignore` that suppressed the very conversion the type was meant to guarantee.
+Converting them to `StrEnum` and adding a validated `status_from_stored()` made mypy immediately
+reject **13 further bare literals in the test suite** it had silently accepted for sessions. The
+type only started working once the escape hatches were removed.
+
+**`StrEnum` is the right shape for a value that crosses a storage boundary.** It compares equal
+to its string form, so PostgreSQL stores the plain `contact`, SQLAlchemy reads it back without a
+cast, JSON serialises to `"contact"`, and the generated OpenAPI gains a real enum schema. A
+`Literal` gives the type checker something to say but leaves the ORM-to-domain conversion
+unchecked, which is what produced the `type: ignore` in the first place.
+
+**Duplicated constants can be a symptom rather than the disease.** Three restated length limits
+in `app/api/schemas/submissions.py` looked like a DRY violation. The actual cause was that
+`SubmissionCreate` had been dead since Unit 2B replaced it with config-driven validation.
+Deleting the dead class removed all three duplicates at once. Deduplicating them in place would
+have preserved a class no code could reach.
+
+**Strictness on a read path is a liability if the data is already stored.** Making
+`kind_from_stored()` raise was correct for a boundary, wrong for a repository: the container proof
+showed a corrupt row turning a public endpoint into a 500. That contradicted the graceful
+degradation already proven for a NULL config, and a 500 reachable from stored state is a
+denial-of-service lever. The fix keeps both: `kind_from_stored()` stays strict, `kind_or_default()`
+degrades.
+
+### Mistakes and corrections
+
+**I reached for `cast()` while removing a `type: ignore`.** The first `kind_from_stored`
+implementation checked membership in a frozenset then cast the value to the `Literal`. That is the
+same suppression I had just deleted from the outbox repository, wearing a different hat. Replaced
+with a `StrEnum`, where the conversion is genuinely checked rather than asserted.
+
+**A mechanical multi-file edit landed an import mid-block.** Inserting a helper next to an import
+line put a function definition between two imports and tripped `E402`. Ruff caught it
+immediately; the lesson is that a scripted edit still needs the linter run before the test suite.
+
+**A rebuilt container ran stale code and I nearly believed the result.** The proof still reported
+`HTTP 500` after the fix. Rather than assume the fix was wrong, I checked whether the fix was
+present in the image:
+
+```text
+$ docker compose exec -T backend grep -c 'kind_or_default' /app/app/repositories/widgets.py
+0
+$ grep -c 'kind_or_default' app/repositories/widgets.py
+3
+```
+
+Host had it, image did not — a cached Docker layer. `docker compose build --no-cache backend`
+fixed it and the check went 500 -> 200. Verifying the code under test is actually deployed is part
+of a runtime proof, not a detail.
+
+**I wrote a test that assumed a fresh rate-limit quota.** Two leak tests failed with `429 != 422`
+because earlier tests in the same file had exhausted the per-IP submission budget. The codebase
+already had `reset_rate_limiters()` for exactly this. Wired it into the fixture and added a
+deliberate 429 leak check, since a rate-limited response is a client-reachable body too.
+
+### Decisions
+
+**The one-member narrowing on `LivenessResponse` stays.** Widening it to the full `HealthStatus`
+enum broke `test_liveness_openapi_allows_only_healthy_status`, because `/health/live` would then
+advertise `unhealthy` in its published schema. The test was right and the refactor was wrong;
+`Literal[HealthStatus.HEALTHY]` keeps the OpenAPI `const`.
+
+**The error-body deny-list is mutation-tested.** A guard that has never failed proves nothing, so
+a leak was injected into a 404 detail and the suite was confirmed to fail on `'psycopg'` before
+the code was restored. That is the difference between a test that passes and a test that works.
+
+**The deny-list names this codebase's internals, not generic advice.** Driver and ORM module
+names, SQL keywords, `[SQL:` and `sqlalche.me`, path fragments including `.venv` and
+`site-packages`, the settings field names, and the ORM class names — 24 fragments chosen because
+they are what would actually appear if this app leaked.
+
+### Verification
+
+```text
+uv run pytest        212 passed
+uv run ruff check .  All checks passed!
+uv run mypy          Success: no issues found in 90 source files
+runtime              5/5 container checks, incl. corrupt-row degradation 500 -> 200
+mutation             injected leak caught by the deny-list, then restored
+```
+
+Transcripts in `EVIDENCE.md`.

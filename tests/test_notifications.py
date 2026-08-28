@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from app.core.outbox import OutboxMessage
+from app.core.outbox import OutboxMessage, OutboxStatus
 from app.services.notifications import (
     LoggingNotificationTransport,
     WebhookNotificationTransport,
@@ -13,7 +13,7 @@ MESSAGE = OutboxMessage(
     topic="submission.created",
     idempotency_key="submission:1:created",
     payload={"submission_id": 1, "widget_id": 5},
-    status="pending",
+    status=OutboxStatus.PENDING,
     attempts=0,
 )
 

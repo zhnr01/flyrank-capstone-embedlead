@@ -928,3 +928,139 @@ uv run pytest        196 passed
 uv run ruff check .  All checks passed!
 uv run mypy          Success: no issues found in 88 source files
 ```
+
+## Unit 1 — naming, magic literals, and the missing error-body test
+
+Two review passes fed this unit: a magic-literal audit and a security audit that walked nine
+abuse cases. Both were delegated as research; every finding below was re-verified against the
+code before anything changed, and one turned out to be already fixed.
+
+### The findings, and what was actually wrong
+
+| Finding | Verdict | Fix |
+|---|---|---|
+| `SERVER_ERROR_STATUS = 500` in `app/api/request_context.py` | confirmed | deleted; imports `starlette.status` like the 9 other files already did |
+| 9 bare `"pending"`/`"sent"`/`"failed"` literals in `app/repositories/outbox.py` | confirmed | `OutboxStatus` is now a `StrEnum`; all 9 replaced |
+| `# type: ignore[arg-type]` at `app/repositories/outbox.py:41` | confirmed | replaced with `status_from_stored()`, which validates and raises on an unknown value |
+| `Literal["healthy","unhealthy"]` spelled out 4× | confirmed (7 locations across two files) | one `HealthStatus` StrEnum owned by `app/services/health.py` |
+| `"contact"` duplicated in schema and seed | confirmed | `CONTACT_KIND` in `app/core/widget_config.py` |
+| `topic="submission.created"` bare literal | confirmed | `OutboxTopic` + `SUBMISSION_CREATED_TOPIC`; `enqueue` now takes `OutboxTopic` |
+| `WidgetKind` widened back to `str` in 3 places | confirmed, introduced by Unit 2B | `WidgetKind` is a `StrEnum`; the dataclass and both response schemas use it |
+| duplicated length constants `120`/`2_000`/`200` | confirmed | root cause was dead code — see below |
+
+### The named types paid for themselves immediately
+
+Turning `OutboxStatus` and `HealthStatus` into real types made mypy reject **13 further bare
+literals in the test suite** that it had previously accepted. Those were invisible while the type
+was a `Literal` alias that nothing enforced.
+
+One change was caught by an existing contract test. Annotating `LivenessResponse.status` as the
+full `HealthStatus` enum broke `test_liveness_openapi_allows_only_healthy_status`, because
+`/health/live` would then advertise `unhealthy` as a possible value in its OpenAPI schema. The
+one-member narrowing is load-bearing, so it stayed as `Literal[HealthStatus.HEALTHY]`.
+
+### The duplicated constants were a symptom of dead code
+
+`app/api/schemas/submissions.py` restated `120`, `2_000` and `200` as bare ints while
+`app/core/submission_payload.py` owned the named versions. The real problem was that
+`SubmissionCreate` had been dead since Unit 2B replaced it with config-driven validation:
+
+```text
+$ grep -rn 'SubmissionCreate' app/ tests/ --include='*.py' | grep -v schemas/submissions.py
+DEAD CODE CONFIRMED: zero references outside its own definition
+```
+
+Deleting it removed all three duplicated constants at once. `SubmissionAccepted.status` also
+gained a real `SubmissionStatus` type instead of a bare `str` with a literal default.
+
+`MAX_HONEYPOT_LENGTH` was dead in the other direction — defined, never used, so nothing bounded
+the honeypot field. Now enforced, with a test.
+
+### The missing abuse case: internal-detail leak in an error body
+
+The security audit found eight of nine abuse cases covered and one entirely absent. Current
+behaviour was in fact safe, but nothing asserted it, so a single custom exception handler could
+regress it silently. The audit mapped every path where an exception value could reach a body;
+the one that interpolates is code written in Unit 2B:
+
+```python
+app/api/routes/public_submissions.py:73
+    detail=str(error),
+```
+
+Safe today because every message in `validate_against_config` is hand-written — verified by
+driving the validator with non-string inputs and reading back only `'email must be a string'`
+and `'name must be a string'`. But it is a `str(exception)` on a client-reachable path.
+
+`tests/api/test_error_body_leaks.py` now sweeps every client-reachable status — 404, 401, 413,
+422, 429 — against a deny-list of 24 fragments: driver and ORM names, SQL keywords, path
+fragments, settings field names, ORM class names.
+
+### The deny-list was mutation-tested
+
+A guard that has never failed proves nothing, so a leak was injected deliberately:
+
+```text
+$ # temporarily: detail=f"Widget not found (SELECT * FROM widgets WHERE id={widget_id}) [SQL: psycopg]"
+AssertionError: 404 config leaked 'psycopg': {"detail":"Widget not found (SELECT * FROM ...
+1 failed, 9 passed
+$ # restored
+10 passed
+```
+
+### A 500 is worse than a default on a public endpoint
+
+The first container proof showed the new strictness had a sharp edge:
+
+```text
+=== 4. an unknown stored value ===
+  widget 2 with kind='bogus_kind' -> HTTP 500
+```
+
+A corrupt row made a public endpoint raise. The body was opaque, so nothing leaked, but a 500 is
+a denial-of-service lever and it contradicted the graceful degradation already proven for a NULL
+config in Unit 2B. `kind_or_default()` and a `ValidationError` guard in `config_from_stored()`
+now degrade to a safe default, while `kind_from_stored()` stays strict for callers that want it.
+Five tests in `tests/test_widget_config_degradation.py` pin both behaviours.
+
+### Container transcript
+
+```text
+=== 1. StrEnum refactors survive a real round-trip through PostgreSQL ===
+  widget kind served      : 'contact'
+  stored in db            : 'contact'
+  OpenAPI enum for kind   : #/components/schemas/WidgetKind
+
+=== 2. health status enum serialises as a plain string ===
+  /health/live  -> 200 {'status': 'healthy'}
+  /health/ready -> 200 healthy | checks: ['database']
+
+=== 3. outbox status enum round-trips through the real column ===
+  submission -> 202 {'status': 'accepted'}
+  outbox row  : pending|submission.created
+  distinct statuses stored: pending
+
+=== 4. a corrupt stored kind degrades instead of raising ===
+  widget 2 with kind='bogus_kind' -> HTTP 200
+  body: {"widget_id":2,"name":"Globex contact form","kind":"contact","version":"v2",...
+  restored -> contact
+
+=== 5. error bodies leak nothing ===
+  404 unknown widget   -> 404 | leaks: none
+  404 old bundle       -> 404 | leaks: none
+  401 no token         -> 401 | leaks: none
+  401 junk token       -> 401 | leaks: none
+  422 bad email        -> 422 | leaks: none
+```
+
+The `StrEnum` choice is what makes check 1 work: the value stored in PostgreSQL is the plain
+string `contact`, the JSON served is `"contact"`, and the generated OpenAPI now carries a real
+`WidgetKind` enum schema rather than an untyped string.
+
+### Gates
+
+```text
+uv run pytest        212 passed
+uv run ruff check .  All checks passed!
+uv run mypy          Success: no issues found in 89 source files
+```

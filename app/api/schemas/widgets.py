@@ -26,7 +26,7 @@ class WidgetResponse(BaseModel):
 
     id: int
     name: str
-    kind: str
+    kind: WidgetKind
     config: WidgetConfig
 
 
@@ -38,7 +38,7 @@ class WidgetListResponse(BaseModel):
 class WidgetConfigResponse(BaseModel):
     widget_id: int
     name: str
-    kind: str
+    kind: WidgetKind
     version: str
     config: WidgetConfig
 

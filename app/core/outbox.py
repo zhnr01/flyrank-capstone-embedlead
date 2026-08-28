@@ -1,8 +1,24 @@
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from typing import Literal, Protocol
 
-OutboxStatus = Literal["pending", "sent", "failed"]
+
+class OutboxStatus(StrEnum):
+    PENDING = "pending"
+    SENT = "sent"
+    FAILED = "failed"
+
+
+OutboxTopic = Literal["submission.created"]
+SUBMISSION_CREATED_TOPIC: OutboxTopic = "submission.created"
+
+
+def status_from_stored(value: str) -> OutboxStatus:
+    try:
+        return OutboxStatus(value)
+    except ValueError:
+        raise ValueError(f"unknown outbox status: {value!r}") from None
 
 
 @dataclass(frozen=True)
