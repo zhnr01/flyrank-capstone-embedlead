@@ -39,6 +39,9 @@ services:
       OUTBOX_POLL_SECONDS: "2.0"
       WIDGET_BUNDLE_VERSION: "v1"
       PUBLIC_BASE_URL: "http://localhost:8000"
+      LOG_LEVEL: "INFO"
+      METRICS_TOKEN: "local-development-only-metrics-token"
+      METRICS_MAX_SERIES: "512"
     ports:
       - "8000:8000"
     healthcheck:

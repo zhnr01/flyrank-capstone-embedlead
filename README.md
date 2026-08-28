@@ -2,7 +2,7 @@
 
 A backend capstone for serving embeddable lead-capture widgets and safely accepting submissions from websites the platform does not control.
 
-> Project status: foundation in progress. The health/startup tracer and the first tenant-scoped widget create/read tracer are implemented and verified. Real login, public submission, abuse protection, enrichment, delivery, and dashboard features are not yet implemented.
+> Project status: the required capstone core is implemented and proven end to end — authentication, tenant-isolated widget CRUD, cached public delivery, cross-origin submissions, abuse protection, geo enrichment, transactional-outbox notifications, an owner dashboard, and request-scoped observability. Remaining work is deployment hardening, not missing features; see [Limitations](#limitations).
 
 ## Implemented now
 
@@ -27,6 +27,7 @@ A backend capstone for serving embeddable lead-capture widgets and safely accept
 - Cached widget delivery: content-hash ETag with `304` revalidation, an immutably versioned bundle, and a per-widget embed snippet.
 - Owner dashboard: tenant-scoped submission list with cursor pagination plus aggregation stats.
 - A second-origin demo page and a deterministic seed command, so the whole flow is reproducible in a browser.
+- Operable observability: JSON logs with a propagated request id, redaction of sensitive fields, and a token-protected metrics endpoint with bounded label cardinality.
 
 ## Why this system exists
 
@@ -206,6 +207,47 @@ Unavailable database: HTTP `503`
 ```
 
 The public response exposes an error category, not the raw database exception message, connection string, SQL text, or credentials.
+
+### `GET /api/v1/system/metrics`
+
+Operator-only RED signals for the running process: request counts by method, route template, and status class; latency histograms with p50/p95/p99; and named event counters for rate limiting, honeypot drops, geo outcomes, and outbox delivery.
+
+Access is a shared operator token compared in constant time:
+
+```text
+X-Metrics-Token: <token>
+```
+
+The endpoint fails closed. With `METRICS_TOKEN` unset it returns `404`, so a deployment that forgets to configure it does not expose operational intelligence by default. A wrong or missing token returns `401`.
+
+```json
+{
+  "requests": [
+    {
+      "method": "GET",
+      "route": "/api/v1/public/widgets/{widget_id}/config",
+      "status_class": "2xx",
+      "count": 3
+    }
+  ],
+  "latency": [
+    {
+      "method": "GET",
+      "route": "/api/v1/public/widgets/{widget_id}/config",
+      "count": 3,
+      "sum_seconds": 0.0181,
+      "p50_seconds": 0.005,
+      "p95_seconds": 0.025,
+      "p99_seconds": 0.025,
+      "buckets": [{ "le": 0.005, "count": 2 }, { "le": 0.025, "count": 1 }]
+    }
+  ],
+  "events": [{ "name": "submission_stored", "outcome": "ok", "count": 1 }],
+  "cardinality": { "series": 8, "max_series": 512, "overflowed": false }
+}
+```
+
+Route labels are the **route template**, never the concrete path. `/widgets/91` and `/widgets/92` share one series, so an attacker cannot inflate memory by walking ids. Unmatched paths collapse into a single `unmatched` series for the same reason. Total series are capped by `METRICS_MAX_SERIES`; past the cap, counts are folded into an `other` row and `cardinality.overflowed` reports it rather than silently dropping data.
 
 ### `POST /api/v1/widgets`
 
@@ -411,27 +453,33 @@ Reproducible command output and pending acceptance criteria are tracked in [`EVI
 `-- capstone.yaml
 ```
 
-## Planned core work
+## Remaining work
 
-The next vertical slices are:
+The required capstone core is complete. What is left is deployment and scale work, ordered by what a real operator would need first:
 
-1. Login/user lifecycle and complete tenant-isolated widget CRUD.
-2. Public submission with validation and cross-origin behavior.
-3. Payload limits, per-IP/per-widget rate limits, and honeypot spam control.
-4. Geo-provider fallback with graceful degradation.
-5. Durable notification intent and retryable background delivery.
-6. Versioned widget script, cacheable public configuration, and a second-origin test page.
-7. Tenant-scoped lead listing and aggregate dashboard queries.
-8. Complete evaluator evidence and demo data.
+1. Move rate-limit and metrics state into Redis so horizontal scaling is correct.
+2. Expose metrics in OpenMetrics text format and add alert rules on the RED signals.
+3. Supervise the outbox worker as a Compose service with exponential backoff and dead-letter replay.
+4. Re-measure the composite widget index on realistic row counts.
+5. CI running the same three gates that run locally, then a deployed environment with TLS and backups.
 
 Stretch features remain out of scope until the required acceptance probes pass.
 
 ## Limitations
 
-- No widget, submission, authentication, tenant, worker, Redis, or dashboard implementation exists yet.
-- No product database tables or Alembic migrations exist yet.
-- The current Compose credentials are local-development placeholders, not production secrets.
-- Cloud deployment, TLS, backups, monitoring, and CI are not configured yet.
+Stated deliberately, because knowing what a system does not do is part of operating it.
+
+**In-process state that does not survive scaling.** Rate-limit counters and the metrics registry both live in the process. With N worker processes the effective rate limit becomes N x limit, and each worker reports only its own slice of traffic. A shared store (Redis) and a scraped exposition format (Prometheus) are the correct fixes before running more than one container.
+
+**Metrics are pull-only and reset on restart.** The snapshot is JSON for a human or a simple scraper, not an OpenMetrics text endpoint, and there is no persistence, no histogram merging across instances, and no alert rules. Label cardinality is bounded by `METRICS_MAX_SERIES`, and overflow is reported rather than hidden, but the bound is defensive — it does not make the numbers cluster-wide.
+
+**No distributed tracing.** A request id is generated, propagated through logs, and echoed in `X-Request-ID`, which is enough to correlate one request across log lines in one service. It is not a span tree, and there is no W3C `traceparent` propagation to downstream providers.
+
+**Notification delivery is intentionally minimal.** Webhook only, fixed attempt budget, no exponential backoff, no SMTP transport, and no automatic dead-letter replay. The worker is also not yet a supervised Compose service.
+
+**Index usage is unproven at demo data volume.** The composite widget index exists, but `EXPLAIN (ANALYZE, BUFFERS)` shows a sequential scan at six rows, which is correct planner behaviour. The index is recorded as unverified rather than claimed as an optimisation.
+
+**Operational scope.** Compose credentials and the metrics token are local-development placeholders. Cloud deployment, TLS termination, backups, log shipping, and CI are not configured.
 
 ## Public project documents
 

@@ -13,6 +13,7 @@ from app.api.schemas.submissions import SubmissionAccepted, SubmissionCreate
 from app.api.submission_dependencies import SubmissionRepositoryDep
 from app.api.widget_dependencies import WidgetRepositoryDep
 from app.core.geo import GeoLocation, GeoProviderChain
+from app.core.metrics import increment
 from app.core.outbox import submission_created_key
 
 logger = logging.getLogger(__name__)
@@ -26,7 +27,8 @@ def enrich_without_failing(
     try:
         return chain.lookup(ip_address)
     except Exception:
-        logger.warning("geo enrichment failed, storing without location", exc_info=True)
+        increment("geo_enrichment", "error")
+        logger.warning("geo_enrichment_failed", exc_info=True)
         return None
 
 
@@ -57,10 +59,15 @@ def create_submission(
         )
 
     if payload.looks_automated:
-        logger.warning("honeypot triggered for widget %s", widget_id)
+        increment("submission_dropped", "honeypot")
+        logger.warning(
+            "honeypot_triggered",
+            extra={"fields": {"widget_id": widget_id}},
+        )
         return SubmissionAccepted()
 
     location = enrich_without_failing(geo_chain, client_address(request))
+    increment("geo_enrichment", "hit" if location else "miss")
 
     submission = submissions.create(
         widget_id=ownership.id,
@@ -80,4 +87,5 @@ def create_submission(
         },
     )
     unit_of_work.commit()
+    increment("submission_stored", "ok")
     return SubmissionAccepted()

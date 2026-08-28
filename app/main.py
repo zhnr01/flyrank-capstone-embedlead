@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.request_context import RequestContextMiddleware
 from app.api.routes import (
     auth,
     dashboard,
@@ -10,11 +11,16 @@ from app.api.routes import (
     widgets,
 )
 from app.core.config import settings
+from app.core.logging_config import configure_logging
+
+configure_logging(settings.log_level)
 
 app = FastAPI(
     title=settings.project_name,
     openapi_url="/api/v1/openapi.json",
 )
+
+app.add_middleware(RequestContextMiddleware)
 
 if settings.backend_cors_origins:
     app.add_middleware(

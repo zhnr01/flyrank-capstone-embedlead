@@ -12,14 +12,14 @@ Status values:
 
 | File | Status | Note |
 |---|---|---|
-| `README.md` | PARTIAL | Architecture sketch, run steps, and API docs present; seed step and limitations section pending. |
-| `capstone.yaml` | PARTIAL | `run`, `test`, `base_url`, and endpoints declared; `seed` is `NOT_IMPLEMENTED_YET` until the seed command exists. |
-| `EVIDENCE.md` | PARTIAL | Filled per completed slice. |
-| `BUILDLOG.md` | PARTIAL | Maintained per slice. |
+| `README.md` | DONE | Architecture sketch, run steps, seed step, per-endpoint API docs, and an honest limitations section. |
+| `capstone.yaml` | DONE | `run`, `seed`, `test`, `base_url`, worker command, demo page, and endpoints all declared and real. |
+| `EVIDENCE.md` | DONE | Pasted runtime proof per slice, including the acceptance probes. |
+| `BUILDLOG.md` | DONE | Maintained per slice, including mistakes and corrections. |
 | `.env.example` | DONE | Placeholder values only; no secrets. |
 | `LICENSE` | DONE | MIT. |
 | `.gitignore` | DONE | Excludes `.env`, virtualenv, caches, and private learning material. |
-| Public repo, incremental history | DONE | Nine commits, one per working slice, no force-push. |
+| Public repo, incremental history | DONE | One commit per working slice, no force-push. |
 
 ## Section 4 — the five moving parts
 
@@ -47,9 +47,9 @@ Status values:
 
 | Box | Status |
 |---|---|
-| Public config endpoint with correct cache headers | TODO |
-| Versioned JavaScript bundle (new version = new URL) | TODO |
-| Widget renders on a page from a different origin | TODO |
+| Public config endpoint with correct cache headers | DONE |
+| Versioned JavaScript bundle (new version = new URL) | DONE |
+| Widget renders on a page from a different origin | DONE |
 
 ### Public submission API
 
@@ -78,9 +78,9 @@ Status values:
 
 | Box | Status | Note |
 |---|---|---|
-| Tests cover CORS preflight, invalid payload, oversized payload, rate limiting, spam control, provider fallback, widget rendering | TODO | 29 tests exist but none of these seven cases yet. |
-| README with architecture diagram, setup, API docs | PARTIAL | Diagram and API docs present; seed and limitations pending. |
-| Five submission-pack files present | PARTIAL | `LICENSE` missing; `capstone.yaml` seed pending. |
+| Tests cover CORS preflight, invalid payload, oversized payload, rate limiting, spam control, provider fallback, widget rendering | DONE | All seven cases covered across 135 tests; the rendering case is proven by the second-origin browser transcript in `EVIDENCE.md`. |
+| README with architecture diagram, setup, API docs | DONE | Diagram, run steps, seed step, per-endpoint docs, and an honest limitations section. |
+| Five submission-pack files present | DONE | `README.md`, `capstone.yaml`, `EVIDENCE.md`, `BUILDLOG.md`, `.env.example`, plus `LICENSE`. |
 
 ## Section 12 — acceptance probes
 
@@ -104,7 +104,18 @@ Status values:
 | 5 | Idempotency where it matters — retried action happens once | DONE | Derived idempotency key with a database unique constraint; duplicate enqueue is a no-op, proven at runtime. |
 | 6 | Secrets clean — env only, never logged | DONE | `.env` ignored, `.env.example` placeholders, production rejects the development key. Webhook secret signs via HMAC and is never transmitted or logged, asserted by test. |
 | 7 | Cost tracked if AI is used | N/A | No AI feature in this system. |
-| 8 | Tests that matter — the scary cases, deterministic | DONE | 106 tests: auth, tenant isolation, CORS, oversized, abuse with an injected clock, provider failure, real webhook failure, caching/304, dashboard scoping. |
+| 8 | Tests that matter — the scary cases, deterministic | DONE | 135 tests: auth, tenant isolation, CORS, oversized, abuse with an injected clock, provider failure, real webhook failure, caching/304, dashboard scoping, metrics auth and cardinality bounds. |
+
+## Observability (shared requirement: operators can see it working)
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| Structured logs with a correlation id | DONE | JSON formatter; `request_id` on every line including `uvicorn.access`; container transcript in `EVIDENCE.md`. |
+| Caller-supplied correlation id is propagated but not trusted | DONE | Short alphanumeric ids echoed; hostile values replaced with a UUID, proven for newline, whitespace, script-tag, and over-long payloads. |
+| Sensitive values never logged | DONE | Redaction set covers password, secret, token, authorization, signature, email, api_key; container `grep` for the operator token and the lead email both return 0. |
+| RED signals available to an operator | DONE | Request counts by status class, latency histograms with p50/p95/p99, and named event counters for rate limiting, honeypot, geo, and outbox. |
+| Monitoring endpoint is access-controlled and fails closed | DONE | `404` with no token configured, `401` on missing/wrong token, constant-time comparison. |
+| Metric label cardinality is bounded | DONE | Route templates not paths; single `unmatched` series; `METRICS_MAX_SERIES` cap with reserved overflow budget and reported `overflowed`. |
 
 ## Known defects found during compliance review
 
@@ -114,16 +125,21 @@ Status values:
 | Compose passed no `BACKEND_CORS_ORIGINS`, so CORS was absent in the container even though tests passed via `conftest.py` | Tests green while the shipped artifact had no CORS at all — caught only by runtime proof | Fixed — compose now sets the variable; re-verified in-container |
 | Test fixtures used the reserved `.test` TLD, which `email-validator` rejects | Tests would fail for the wrong reason | Fixed — fixtures use `example.com` |
 | `EVIDENCE.md` "Widget management" section listed login, memberships, and update/delete/list as PENDING although implemented | Stale evidence contradicted itself and understated completed work | Fixed — cross-referenced to the proving sections |
-| `capstone.yaml` declared a `seed:` command that does not exist | An evaluator running it would hit an error | Fixed — now `NOT_IMPLEMENTED_YET` |
+| `capstone.yaml` declared a `seed:` command that does not exist | An evaluator running it would hit an error | Fixed — seed command implemented and verified |
+| `/metrics` was initially unauthenticated | Published error rates, latency, and honeypot hit counts to anyone — a map of where the system is weak | Fixed — operator token with `compare_digest`, and `404` when unconfigured, proven against a token-less container |
+| Metric labels initially came from the concrete request path | Cardinality bomb: walking `/widgets/{id}` would allocate one series per id | Fixed — route templates plus a reserved-budget `METRICS_MAX_SERIES` cap with reported overflow |
+| The series cap did not budget for its own overflow rows | A cap of 4 actually settled at 6, so the bound did not hold | Fixed — overflow budget reserved up front; caught by an abuse test, not by review |
+| `X-Request-ID` was echoed after only a length check | Header and log injection via a caller-controlled value | Fixed — non-alphanumeric or long values replaced with a fresh UUID |
+| README `Limitations` still claimed no widget, submission, auth, tenant, worker, or dashboard implementation existed | Directly contradicted the feature list in the same file | Fixed — rewritten to state the real operational limits |
 | Composite widget index exists but plan shows a sequential scan at six rows | Index usage unproven | Open — re-measure on realistic data |
+| Rate-limit counters and the metrics registry are in-process | Incorrect under horizontal scaling: limit becomes N x limit, metrics are per-instance | Open and documented — Redis required before multi-container |
 
 ## Remaining build order
 
-1. Public submission core: CORS settings + middleware, boundary validation, size guard, storage, tenant linkage.
-2. Abuse protection: per-IP and per-widget rate limiting, honeypot.
-3. Geo enrichment with provider fallback chain, mocked deterministically in tests.
-4. Background job + idempotency for the safe side effect.
-5. Widget delivery: config endpoint with cache headers, versioned bundle, second-origin test page.
-6. Embed snippet generation.
-7. Dashboard API with aggregation queries.
-8. Seed command, `LICENSE`, README limitations, full evidence pass.
+The required core is complete and proven. Remaining items are scale and deployment work:
+
+1. Shared state (Redis) for rate limiting and metrics so horizontal scaling is correct.
+2. OpenMetrics exposition plus alert rules on the RED signals.
+3. Supervised outbox worker with exponential backoff and dead-letter replay.
+4. Re-measure the composite widget index on realistic row counts.
+5. CI running ruff, strict mypy, and pytest; then a deployed environment with TLS and backups.

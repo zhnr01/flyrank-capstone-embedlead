@@ -395,3 +395,132 @@ handler, so the submit event was dispatched via `requestSubmit()` on the same lo
 That is a browser-automation artifact, not an application defect: the form, its listener,
 the cross-origin request, the stored row, and the queued outbox message are all real and
 verified above. A human clicking the button exercises the identical code path.
+
+## Observability
+
+- [x] Structured JSON logs with a request id propagated through every log line
+- [x] Sensitive fields redacted before serialisation
+- [x] RED signals exposed: request counts by status class, latency histograms, event counters
+- [x] Metrics endpoint fails closed when no operator token is configured
+- [x] Metric label cardinality bounded, with overflow reported rather than hidden
+
+### Access control proof (runtime, in-container)
+
+```text
+GET /api/v1/system/metrics                             -> 401 {"detail":"Invalid metrics token"}
+GET /api/v1/system/metrics  X-Metrics-Token: wrong     -> 401
+GET /api/v1/system/metrics  X-Metrics-Token: <correct> -> 200 with snapshot
+```
+
+Fail-closed proof against a second container started with `METRICS_TOKEN` unset:
+
+```text
+GET /api/v1/system/metrics                              -> 404 {"detail":"Not Found"}
+GET /api/v1/system/metrics  X-Metrics-Token: <valid>    -> 404
+```
+
+An unconfigured deployment does not expose operational intelligence, and it does not
+advertise that the route exists. The token is compared with `secrets.compare_digest`,
+and the expected value never appears in a response body.
+
+### Request-id correlation proof
+
+```text
+GET /api/v1/system/health/live
+  -> x-request-id: 8e0422d9-2d4b-4064-8860-c96955d5fb53   (generated)
+
+GET /api/v1/system/health/live  X-Request-ID: proof-trace-0001
+  -> x-request-id: proof-trace-0001                        (caller value propagated)
+
+GET /api/v1/system/health/live  X-Request-ID: zzz...(200 chars)
+  -> x-request-id: 8e8b07f5-6ff1-45ec-a17f-9ea904a20e6d    (hostile value replaced)
+```
+
+A caller-supplied id is only trusted when it is short and alphanumeric. Anything else is
+replaced with a fresh UUID, so the header cannot be used to inject log content or smuggle
+response headers.
+
+Container log lines are JSON and carry the id:
+
+```text
+{"event":"172.18.0.1:53846 - \"GET /api/v1/public/widgets/bundle/v99/widget.js HTTP/1.1\" 404",
+ "level":"INFO","logger":"uvicorn.access",
+ "request_id":"adaf7d8b-ec97-4470-b7cd-75108b4fecd0","timestamp":"2026-08-28T02:15:29"}
+```
+
+### Label cardinality proof
+
+Five requests to five distinct widget ids, three requests to three distinct unknown paths,
+and two bundle versions were issued. The operator sees route templates, not raw paths:
+
+```text
+GET   2xx  /api/v1/public/widgets/bundle/{version}/widget.js  count=1
+GET   4xx  /api/v1/public/widgets/bundle/{version}/widget.js  count=1
+GET   4xx  /api/v1/public/widgets/{widget_id}/config          count=5
+GET   2xx  /api/v1/system/health/live                         count=3
+GET   2xx  /api/v1/system/health/ready                        count=13
+GET   4xx  /api/v1/system/metrics                             count=2
+GET   4xx  unmatched                                          count=3
+cardinality: {'series': 13, 'max_series': 512, 'overflowed': False}
+
+LEAKED_ID_LABELS: NONE
+```
+
+Five ids collapsed into one series and three unknown paths into one `unmatched` series.
+This is the difference between a metrics endpoint and a memory-exhaustion vector: walking
+`/widgets/1`..`/widgets/100000` cannot create 100000 series.
+
+### Event counter and histogram proof
+
+A real submission, a honeypot submission, and an eight-request burst were issued against
+the seeded widget:
+
+```text
+submit=202  honeypot=202  burst=202 202 202 429 429 429 429 429
+
+geo_enrichment               miss       count=4
+submission_dropped           honeypot   count=1
+submission_rate_limited      ip         count=5
+submission_stored            ok         count=4
+
+cardinality: {'series': 22, 'max_series': 512, 'overflowed': False}
+```
+
+The counters agree with the HTTP transcript: four stored (one real plus three that passed
+the limiter), one honeypot drop, five rejections. Latency histograms were checked for
+internal consistency across every series:
+
+```text
+/api/v1/public/widgets/{widget_id}/submissions  n=10 p50=0.005 p95=0.05 p99=0.05 buckets_sum=10 mono=True
+/api/v1/public/widgets/{widget_id}/config       n= 6 p50=0.005 p95=0.05 p99=0.05 buckets_sum=6  mono=True
+/api/v1/system/health/ready                     n=23 p50=0.005 p95=0.005 p99=0.05 buckets_sum=23 mono=True
+unmatched                                       n= 3 p50=0.005 p95=0.005 p99=0.005 buckets_sum=3 mono=True
+ALL_HISTOGRAMS_CONSISTENT: True
+```
+
+Every histogram's bucket counts sum to its observation count and its quantiles are
+monotonic, so the numbers are arithmetically sound rather than merely present.
+
+### Secret and PII hygiene proof
+
+```text
+grep -c "<metrics token>"    in container logs -> 0
+grep -c "proof@example.com"  in container logs -> 0
+
+{"event":"honeypot_triggered","level":"WARNING",
+ "logger":"app.api.routes.public_submissions",
+ "request_id":"27da60cd-4e70-4a79-af75-6f0a656012cb","widget_id":1}
+```
+
+The operator token never reaches a log line, and neither does the lead's email address:
+`email` is in the redaction set, so a future log call that includes it is redacted by
+construction rather than by reviewer discipline. The honeypot drop is silent to the
+caller by design but visible to the operator at `WARNING`.
+
+### Gates
+
+```text
+uv run ruff check .   -> All checks passed!
+uv run mypy           -> Success: no issues found in 77 source files
+uv run pytest         -> 135 passed
+```

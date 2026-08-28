@@ -5,6 +5,7 @@ base_url: "http://localhost:8000"
 endpoints:
   health: "/api/v1/system/health/live"
   readiness: "/api/v1/system/health/ready"
+  metrics: "/api/v1/system/metrics"
   login: "/api/v1/auth/token"
   widgets: "/api/v1/widgets"
   widget_embed: "/api/v1/widgets/{widget_id}/embed"
@@ -14,4 +15,4 @@ endpoints:
   dashboard: "/api/v1/dashboard/submissions"
 demo_page: "demo/index.html"
 worker: "docker compose exec backend python -m app.worker --once"
-status: "in-progress"
+status: "core-complete"

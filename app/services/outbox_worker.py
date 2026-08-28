@@ -1,6 +1,7 @@
 import logging
 from typing import Protocol
 
+from app.core.metrics import increment
 from app.core.outbox import NotificationTransport
 from app.repositories.outbox import OutboxRepository
 
@@ -28,11 +29,15 @@ class LoggingFailureAlerter:
         error: str,
     ) -> None:
         logger.error(
-            "ALERT outbox dead letter topic=%s key=%s attempts=%s error=%s",
-            topic,
-            idempotency_key,
-            attempts,
-            error,
+            "ALERT_outbox_dead_letter",
+            extra={
+                "fields": {
+                    "topic": topic,
+                    "idempotency_key": idempotency_key,
+                    "attempts": attempts,
+                    "error": error,
+                }
+            },
         )
 
 
@@ -73,11 +78,16 @@ class OutboxWorker:
                 error = f"{type(exc).__name__}: {exc}"
                 exhausted = attempts >= self._max_attempts
                 logger.warning(
-                    "outbox delivery failed key=%s attempts=%s exhausted=%s",
-                    message.idempotency_key,
-                    attempts,
-                    exhausted,
+                    "outbox_delivery_failed",
+                    extra={
+                        "fields": {
+                            "idempotency_key": message.idempotency_key,
+                            "attempts": attempts,
+                            "exhausted": exhausted,
+                        }
+                    },
                 )
+                increment("outbox_delivery", "exhausted" if exhausted else "retry")
                 self._repository.mark_failed(
                     message.id,
                     attempts=attempts,
@@ -93,5 +103,6 @@ class OutboxWorker:
                     )
                 continue
             self._repository.mark_sent(message.id, attempts=attempts)
+            increment("outbox_delivery", "sent")
             processed += 1
         return processed

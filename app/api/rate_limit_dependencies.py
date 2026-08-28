@@ -3,6 +3,7 @@ import logging
 from fastapi import HTTPException, Request, status
 
 from app.core.config import settings
+from app.core.metrics import increment
 from app.core.rate_limit import RateLimiter
 
 logger = logging.getLogger(__name__)
@@ -48,7 +49,16 @@ def enforce_submission_rate_limits(request: Request, widget_id: int) -> None:
         decision = limiter.check(key)
         if not decision.allowed:
             scope = key.split(":")[0]
-            logger.warning("submission rate limit exceeded for scope %s", scope)
+            increment("submission_rate_limited", scope)
+            logger.warning(
+                "submission_rate_limited",
+                extra={
+                    "fields": {
+                        "scope": scope,
+                        "retry_after": decision.retry_after_seconds,
+                    }
+                },
+            )
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Too many submissions, retry later",

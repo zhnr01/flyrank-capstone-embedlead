@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     widget_bundle_version: str = Field(default="v1", pattern=r"^v[0-9]+$")
     widget_config_cache_seconds: int = Field(default=60, gt=0, le=86_400)
     public_base_url: str = "http://localhost:8000"
+    log_level: str = "INFO"
+    metrics_token: str = ""
+    metrics_max_series: int = Field(default=512, gt=0, le=100_000)
     postgres_server: str = "localhost"
     postgres_port: int = 5432
     postgres_db: str = "embedlead"
