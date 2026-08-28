@@ -1,11 +1,12 @@
 from typing import Literal
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Response, status
 from fastapi.responses import JSONResponse
+from prometheus_client import CONTENT_TYPE_LATEST
 from pydantic import BaseModel
 
 from app.api.metrics_dependencies import MetricsAccess
-from app.core.metrics import MetricsSnapshot, registry
+from app.core.metrics import exposition
 from app.services.health import HealthReport, HealthStatus, readiness_report
 
 router = APIRouter()
@@ -38,10 +39,15 @@ async def readiness() -> HealthReport | JSONResponse:
 @router.get(
     "/metrics",
     dependencies=[MetricsAccess],
+    response_class=Response,
     responses={
+        status.HTTP_200_OK: {
+            "content": {CONTENT_TYPE_LATEST: {}},
+            "description": "Prometheus text exposition",
+        },
         status.HTTP_401_UNAUTHORIZED: {"description": "Invalid metrics token"},
         status.HTTP_404_NOT_FOUND: {"description": "Metrics endpoint disabled"},
     },
 )
-async def metrics() -> MetricsSnapshot:
-    return registry.snapshot()
+async def metrics() -> Response:
+    return Response(content=exposition(), media_type=CONTENT_TYPE_LATEST)

@@ -16,11 +16,36 @@ services:
     volumes:
       - embedlead-db-data:/var/lib/postgresql
 
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command:
+      [
+        "redis-server",
+        "--save",
+        "",
+        "--appendonly",
+        "no",
+        "--maxmemory",
+        "256mb",
+        "--maxmemory-policy",
+        "allkeys-lru",
+      ]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    ports:
+      - "127.0.0.1:6379:6379"
+
   backend:
     build: .
     restart: unless-stopped
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     environment:
       PROJECT_NAME: EmbedLead Widget Platform
@@ -43,7 +68,8 @@ services:
       PUBLIC_BASE_URL: "http://localhost:8000"
       LOG_LEVEL: "INFO"
       METRICS_TOKEN: "local-development-only-metrics-token"
-      METRICS_MAX_SERIES: "512"
+      METRICS_MAX_ROUTES: "64"
+      REDIS_URL: "redis://redis:6379/0"
     ports:
       - "8000:8000"
     healthcheck:

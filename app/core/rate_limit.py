@@ -58,6 +58,12 @@ class RateLimiter:
         self._evict_over_cap()
         return RateLimitDecision(allowed=True, retry_after_seconds=0)
 
+    def reset(self) -> None:
+        self._hits.clear()
+
+    def close(self) -> None:
+        self._hits.clear()
+
     def _discard_expired(self, now: float) -> None:
         cutoff = now - self._window
         for key in list(self._hits):

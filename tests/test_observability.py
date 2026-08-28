@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from typing import Any
 
 import pytest
@@ -14,14 +15,12 @@ from app.api.request_context import (
 from app.core.config import settings
 from app.core.logging_config import JsonFormatter, RequestIdFilter, redact
 from app.core.metrics import (
-    MINIMUM_MAX_SERIES,
     OVERFLOW_LABEL,
-    RESERVED_OVERFLOW_SERIES,
-    MetricsRegistry,
-    MetricsSnapshot,
-    registry,
+    render_exposition,
+    reset_metrics,
     status_class,
 )
+from app.core.prometheus_metrics import build_collectors
 from app.main import app
 
 client = TestClient(app)
@@ -33,7 +32,7 @@ BUNDLE_ROUTE = "/api/v1/public/widgets/bundle/{version}/widget.js"
 
 @pytest.fixture(autouse=True)
 def clean_registry() -> None:
-    registry.reset()
+    reset_metrics()
 
 
 @pytest.fixture
@@ -43,15 +42,38 @@ def metrics_token(monkeypatch: pytest.MonkeyPatch) -> str:
     return token
 
 
-def read_metrics(token: str) -> MetricsSnapshot:
+def read_metrics(token: str) -> str:
     response = client.get(METRICS_URL, headers={METRICS_TOKEN_HEADER: token})
     assert response.status_code == 200
-    payload: MetricsSnapshot = response.json()
-    return payload
+    assert response.headers["content-type"].startswith("text/plain")
+    body: str = response.text
+    return body
 
 
-def routes_in(snapshot: MetricsSnapshot) -> set[str]:
-    return {row["route"] for row in snapshot["requests"]}
+def sample_labels(text: str, metric: str) -> list[dict[str, str]]:
+    rows = []
+    for line in text.splitlines():
+        if line.startswith("#") or not line.startswith(f"{metric}{{"):
+            continue
+        inner = line[line.index("{") + 1 : line.rindex("}")]
+        pairs = dict(
+            part.split("=", 1) for part in re.findall(r'[a-z_]+="[^"]*"', inner)
+        )
+        rows.append({key: value.strip('"') for key, value in pairs.items()})
+    return rows
+
+
+def sample_value(text: str, metric: str, **labels: str) -> float:
+    for line in text.splitlines():
+        if line.startswith("#") or not line.startswith(f"{metric}{{"):
+            continue
+        if all(f'{key}="{value}"' in line for key, value in labels.items()):
+            return float(line.rsplit(" ", 1)[1])
+    raise AssertionError(f"no sample for {metric} {labels}")
+
+
+def routes_in(text: str) -> set[str]:
+    return {row["route"] for row in sample_labels(text, "embedlead_requests_total")}
 
 
 def format_record(
@@ -112,25 +134,54 @@ def test_metrics_reports_red_signals_with_bounded_status_labels(
 ) -> None:
     client.get(LIVE_URL)
 
-    snapshot = read_metrics(metrics_token)
+    text = read_metrics(metrics_token)
 
-    assert LIVE_ROUTE in routes_in(snapshot)
-    for request_row in snapshot["requests"]:
-        assert request_row["status_class"] in {"1xx", "2xx", "3xx", "4xx", "5xx"}
-    for latency_row in snapshot["latency"]:
-        p50 = latency_row["p50_seconds"]
-        p95 = latency_row["p95_seconds"]
-        p99 = latency_row["p99_seconds"]
-        assert p50 <= p95 <= p99
-        buckets = latency_row["buckets"]
-        assert sum(bucket["count"] for bucket in buckets) == latency_row["count"]
+    assert LIVE_ROUTE in routes_in(text)
+    for row in sample_labels(text, "embedlead_requests_total"):
+        assert row["status_class"] in {"1xx", "2xx", "3xx", "4xx", "5xx"}
+
+
+def test_latency_histogram_exposes_cumulative_buckets(metrics_token: str) -> None:
+    client.get(LIVE_URL)
+
+    text = read_metrics(metrics_token)
+    infinity = sample_value(
+        text,
+        "embedlead_request_duration_seconds_bucket",
+        method="GET",
+        route=LIVE_ROUTE,
+        le="+Inf",
+    )
+    count = sample_value(
+        text,
+        "embedlead_request_duration_seconds_count",
+        method="GET",
+        route=LIVE_ROUTE,
+    )
+
+    assert infinity == count
+
+
+def test_exposition_declares_help_and_type_for_every_metric(
+    metrics_token: str,
+) -> None:
+    client.get(LIVE_URL)
+
+    text = read_metrics(metrics_token)
+
+    for metric in (
+        "embedlead_requests",
+        "embedlead_request_duration_seconds",
+        "embedlead_events",
+    ):
+        assert f"# HELP {metric}" in text
+        assert f"# TYPE {metric}" in text
 
 
 def test_route_labels_use_templates_not_raw_path_values(metrics_token: str) -> None:
     client.get("/api/v1/public/widgets/bundle/v42/widget.js")
 
-    snapshot = read_metrics(metrics_token)
-    routes = routes_in(snapshot)
+    routes = routes_in(read_metrics(metrics_token))
 
     assert BUNDLE_ROUTE in routes
     assert not any("v42" in route for route in routes)
@@ -140,105 +191,119 @@ def test_unmatched_paths_collapse_to_a_single_series(metrics_token: str) -> None
     for suffix in range(5):
         client.get(f"/api/v1/does-not-exist-{suffix}")
 
-    snapshot = read_metrics(metrics_token)
+    text = read_metrics(metrics_token)
     unmatched = [
-        row for row in snapshot["requests"] if row["route"] == UNMATCHED_ROUTE
+        row
+        for row in sample_labels(text, "embedlead_requests_total")
+        if row["route"] == UNMATCHED_ROUTE
     ]
 
     assert len(unmatched) == 1
-    assert unmatched[0]["count"] == 5
     assert unmatched[0]["status_class"] == "4xx"
+    assert (
+        sample_value(
+            text,
+            "embedlead_requests_total",
+            method="GET",
+            route=UNMATCHED_ROUTE,
+            status_class="4xx",
+        )
+        == 5
+    )
 
 
 def test_failed_dependency_is_recorded_as_a_server_error_not_lost() -> None:
-    local = MetricsRegistry(max_series=64)
+    from prometheus_client import CollectorRegistry
+
+    registry = CollectorRegistry()
+    local = build_collectors(registry, max_routes=64)
 
     local.observe_request(
         method="GET",
-        route="/api/v1/public/widgets/{widget_id}/config",
-        status_code=500,
-        duration_seconds=2.0,
+        route="/api/v1/system/health/ready",
+        status_code=503,
+        duration_seconds=0.01,
     )
-    snapshot = local.snapshot()
 
-    assert snapshot["requests"] == [
-        {
-            "method": "GET",
-            "route": "/api/v1/public/widgets/{widget_id}/config",
-            "status_class": "5xx",
-            "count": 1,
-        }
-    ]
+    assert (
+        registry.get_sample_value(
+            "embedlead_requests_total",
+            {
+                "method": "GET",
+                "route": "/api/v1/system/health/ready",
+                "status_class": "5xx",
+            },
+        )
+        == 1
+    )
 
 
-def test_series_cardinality_is_capped_and_overflow_is_visible() -> None:
-    local = MetricsRegistry(max_series=MINIMUM_MAX_SERIES)
+def test_route_cardinality_is_capped_and_overflow_is_visible() -> None:
+    from prometheus_client import CollectorRegistry
 
-    for index in range(50):
+    registry = CollectorRegistry()
+    local = build_collectors(registry, max_routes=3)
+
+    for index in range(40):
         local.observe_request(
             method="GET",
-            route=f"/synthetic/{index}",
+            route=f"/generated/{index}",
             status_code=200,
             duration_seconds=0.01,
         )
 
-    snapshot = local.snapshot()
-    cardinality = snapshot["cardinality"]
-
-    assert cardinality["series"] <= MINIMUM_MAX_SERIES
-    assert cardinality["overflowed"] is True
-    assert any(row["route"] == OVERFLOW_LABEL for row in snapshot["requests"])
-    observed = sum(row["count"] for row in snapshot["requests"])
-    assert observed == 50
-
-
-def test_cap_holds_across_every_status_class_and_metric_kind() -> None:
-    local = MetricsRegistry(max_series=MINIMUM_MAX_SERIES)
-
-    for index in range(200):
-        local.observe_request(
-            method="GET",
-            route=f"/synthetic/{index}",
-            status_code=200 + index % 400,
-            duration_seconds=0.01,
-        )
-        local.increment(f"event-{index}", f"outcome-{index}")
-
-    assert local.series_count <= MINIMUM_MAX_SERIES
-    assert local.overflowed is True
-
-
-def test_event_counter_labels_are_also_capped() -> None:
-    local = MetricsRegistry(max_series=MINIMUM_MAX_SERIES)
-
-    for index in range(20):
-        local.increment("submission_rate_limited", f"scope-{index}")
-
-    snapshot = local.snapshot()
-
-    assert local.overflowed is True
-    assert sum(row["count"] for row in snapshot["events"]) == 20
-    assert any(row["outcome"] == OVERFLOW_LABEL for row in snapshot["events"])
-
-
-def test_empty_registry_reports_zero_not_an_error() -> None:
-    local = MetricsRegistry(max_series=MINIMUM_MAX_SERIES)
-
-    snapshot = local.snapshot()
-
-    assert snapshot["requests"] == []
-    assert snapshot["latency"] == []
-    assert snapshot["events"] == []
-    assert snapshot["cardinality"] == {
-        "series": 0,
-        "max_series": MINIMUM_MAX_SERIES,
-        "overflowed": False,
+    routes = {
+        sample.labels["route"]
+        for metric in registry.collect()
+        for sample in metric.samples
+        if "route" in sample.labels
     }
 
+    assert len(routes) <= local.max_routes + 1
+    assert OVERFLOW_LABEL in routes
 
-def test_rejects_a_series_cap_too_small_to_hold_its_own_overflow_rows() -> None:
-    with pytest.raises(ValueError, match="max_series"):
-        MetricsRegistry(max_series=RESERVED_OVERFLOW_SERIES)
+
+def test_every_observation_is_counted_even_when_the_route_label_overflows() -> None:
+    from prometheus_client import CollectorRegistry
+
+    registry = CollectorRegistry()
+    local = build_collectors(registry, max_routes=2)
+
+    for index in range(20):
+        local.observe_request(
+            method="GET",
+            route=f"/generated/{index}",
+            status_code=200,
+            duration_seconds=0.01,
+        )
+
+    total = sum(
+        sample.value
+        for metric in registry.collect()
+        if metric.name == "embedlead_requests"
+        for sample in metric.samples
+        if sample.name.endswith("_total")
+    )
+
+    assert total == 20
+
+
+def test_a_registry_with_no_observations_still_renders() -> None:
+    from prometheus_client import CollectorRegistry
+
+    registry = CollectorRegistry()
+    build_collectors(registry, max_routes=8)
+
+    text = render_exposition(registry)
+
+    assert "# TYPE embedlead_requests" in text
+
+
+def test_rejects_a_route_cap_below_one() -> None:
+    from prometheus_client import CollectorRegistry
+
+    with pytest.raises(ValueError, match="max_routes"):
+        build_collectors(CollectorRegistry(), max_routes=0)
 
 
 def test_unknown_status_code_does_not_create_an_unbounded_label() -> None:

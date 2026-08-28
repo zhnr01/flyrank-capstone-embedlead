@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     submission_rate_limit_per_widget: int = Field(default=30, gt=0, le=100_000)
     submission_rate_limit_window_seconds: int = Field(default=60, gt=0, le=3_600)
     rate_limit_max_tracked_keys: int = Field(default=10_000, gt=0)
+    redis_url: str = ""
+    redis_socket_timeout_seconds: float = Field(default=0.25, gt=0, le=10)
+    redis_connect_timeout_seconds: float = Field(default=0.25, gt=0, le=10)
+    redis_health_check_interval_seconds: int = Field(default=30, ge=0, le=600)
+    redis_health_timeout_seconds: float = Field(default=1.0, gt=0, le=10)
     geo_enrichment_enabled: bool = True
     geo_provider_timeout_seconds: float = Field(default=1.0, gt=0, le=10)
     outbox_max_attempts: int = Field(default=3, gt=0, le=20)
@@ -36,7 +41,7 @@ class Settings(BaseSettings):
     public_base_url: str = "http://localhost:8000"
     log_level: str = "INFO"
     metrics_token: str = ""
-    metrics_max_series: int = Field(default=512, gt=0, le=100_000)
+    metrics_max_routes: int = Field(default=64, gt=0, le=10_000)
     postgres_server: str = "localhost"
     postgres_port: int = 5432
     postgres_db: str = "embedlead"

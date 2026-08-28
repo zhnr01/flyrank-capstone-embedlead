@@ -1064,3 +1064,140 @@ uv run pytest        212 passed
 uv run ruff check .  All checks passed!
 uv run mypy          Success: no issues found in 89 source files
 ```
+
+## Unit 3 — shared state for horizontal scaling (README's own "next steps")
+
+The README already named both gaps: an in-process rate limiter that gives N x the limit with N
+replicas, and a JSON metrics endpoint no scraper can read. This unit closes them, and the research
+overturned half of the original plan.
+
+### The plan was wrong about metrics
+
+The intent was "put both the limiter and the metrics registry in Redis". Prometheus's own docs say
+that is an anti-pattern. Prometheus is a **pull** system: it scrapes each target and attaches `job`
+and `instance` labels itself, so N containers produce N label-distinguished series and aggregation
+happens at query time with `sum by (...)`. Centralising would lose per-instance visibility, add a
+write to every request, make observability depend on Redis, and break `rate()` — which assumes a
+monotonic counter per series. Pushgateway is documented as being for batch jobs only.
+
+So the split is: **Redis for the limiter, per-replica Prometheus for metrics.**
+
+### The hand-rolled registry was not just unconventional, it was wrong
+
+221 lines replaced by 56 plus a library. The measurement that settled it:
+
+```text
+90 observations at 10ms, 10 at 400ms
+
+HAND-ROLLED (what we shipped):
+  p50 = 25.0 ms   (true 10ms)  <- 2.5x WRONG
+
+PROMETHEUS (cumulative buckets):
+  le= 0.005 -> 0.0
+  le= 0.025 -> 90.0
+  le=  0.05 -> 90.0
+  le=   0.5 -> 100.0
+  le=  +Inf -> 100.0
+  sum = 4.9 s
+```
+
+`quantile()` returned a bucket **upper bound** instead of interpolating. Prometheus exposes
+cumulative buckets and a sum, so PromQL interpolates inside the bucket and gets ~10ms. The old
+endpoint also emitted non-standard JSON `Infinity` for the overflow bucket.
+
+### Container transcript
+
+```text
+=== 1. the shared store is reachable and EPHEMERAL by design ===
+  ping             : PONG
+  persistence(save): 'save'          (empty -> RDB disabled)
+  appendonly       : no
+  maxmemory-policy : allkeys-lru
+
+=== 2. the rate limiter now writes to Redis, not to process memory ===
+  keys after 3 submissions: ratelimit:LIMITER/widget:1/30/60/second
+                            ratelimit:LIMITER/ip:172.18.0.1/5/60/second
+  VERDICT: shared store in use
+
+=== 3. the limit is enforced ACROSS the whole store ===
+  statuses   : [202, 202, 202, 202, 202, 429, 429, 429, 429]
+  Retry-After: 60
+
+=== 4. /metrics is Prometheus TEXT, gated, and spec-shaped ===
+  without a token -> 401
+  content-type    : text/plain; version=1.0.0; charset=utf-8
+  is JSON?        : False
+  # HELP embedlead_requests                        True
+  # TYPE embedlead_requests                        True
+  embedlead_requests_total{                        True
+  embedlead_request_duration_seconds_bucket{       True
+  le="+Inf"                                        True
+  embedlead_request_duration_seconds_sum           True
+  embedlead_request_duration_seconds_count         True
+  embedlead_events_total{                          True
+
+=== 5. the rate-limit event was actually counted ===
+  embedlead_events_total{name="submission_stored",outcome="ok"} 8.0
+  embedlead_events_total{name="submission_rate_limited",outcome="ip"} 4.0
+
+=== 7. readiness reports redis WITHOUT letting it gate the container ===
+  {"status":"healthy","checks":{"database":{"status":"healthy","response_time_ms":2.11},
+   "redis":{"status":"healthy","response_time_ms":0.9}}}
+
+=== 8. GRACEFUL DEGRADATION: stop Redis, the public form must STILL accept ===
+  submission with Redis DOWN -> 202  (fail OPEN)
+  readiness with Redis DOWN  -> 200
+  {"redis":{"status":"degraded","response_time_ms":1001.18,"error":"TimeoutError"}}
+```
+
+Check 2 is the whole point of the unit: the limiter state is now a Redis key, so a second replica
+shares one budget instead of getting its own. `tests/test_redis_rate_limit.py` pins that directly —
+two limiter instances against one `FakeServer` allow exactly three of four requests.
+
+### The defect the proof found, and the three wrong fixes before the right one
+
+Check 8 originally reported `response_time_ms: 8294` — an 8.3 second readiness probe against a
+250ms configured timeout. A probe that slow is itself an outage risk. Narrowing it took four
+attempts, each measured:
+
+| Attempt | Result | Why it was not enough |
+|---|---|---|
+| `socket_timeout=0.25`, `socket_connect_timeout=0.25` | 8294ms | `Redis.from_url` retries by default |
+| `retry=Retry(NoBackoff(), 0)`, `retry_on_timeout=False` | 3961ms | still ~4s unaccounted for |
+| reuse one pooled client instead of one per probe | 3249ms healthy path 3.18 -> 0.95ms, outage path barely moved |
+| `asyncio.wait_for(..., redis_health_timeout_seconds)` | **1001ms** | correct |
+
+The root cause was not redis-py at all:
+
+```text
+$ docker compose stop redis
+$ docker compose exec backend python -c "socket.getaddrinfo('redis', 6379)"
+DNS FAILED after 3998 ms -> gaierror
+```
+
+Docker removes the DNS record when a container stops, so `getaddrinfo` blocks in libc **before any
+socket exists**. A connect timeout cannot bound name resolution; only a timeout above the resolver
+can. `tests/test_redis_health.py` pins the bound at 0.21s for a hanging check.
+
+### Fail open, deliberately
+
+If Redis is unreachable the limiter falls back to the in-process window rather than rejecting. For
+a public lead-capture form a dropped lead is worse than a tolerated burst, and the fallback still
+enforces a limit — `test_the_fallback_still_enforces_a_limit_rather_than_allowing_everything`
+proves it is not an open door. Redis reports as a `degraded` sub-check while the aggregate status
+follows the database alone, so a Redis outage cannot mark the backend container unhealthy and take
+the API down through `depends_on`.
+
+### Dead configuration removed
+
+`METRICS_MAX_SERIES` was declared in `app/core/config.py`, `compose.yaml` and `.env.example` and
+read by nothing once `prometheus_client` took over cardinality. A setting an operator can change
+with no effect is worse than no setting; deleted from all three.
+
+### Gates
+
+```text
+uv run pytest        245 passed
+uv run ruff check .  All checks passed!
+uv run mypy          Success: no issues found in 97 source files
+```

@@ -564,3 +564,99 @@ mutation             injected leak caught by the deny-list, then restored
 ```
 
 Transcripts in `EVIDENCE.md`.
+
+## Session 10 — Unit 3: shared state, and the research that overturned half the plan
+
+The README already named both gaps as the documented next steps, so this unit was closing a debt
+the project had admitted in writing. Two research subagents were dispatched read-only; every claim
+they made was re-verified against the code before anything changed.
+
+### Concept learned
+
+**Prometheus is a pull system, so per-replica metrics are correct, not fragmented.** The plan was
+to put both the rate limiter and the metrics registry in Redis. That is right for one and an
+anti-pattern for the other. Prometheus scrapes each target and attaches `job` and `instance`
+labels itself; aggregation belongs in PromQL (`sum by (...)`), not in the application. Centralising
+metrics would lose per-instance visibility, add a write to every request, make observability
+depend on Redis being up, and break `rate()`, which assumes a monotonic counter per series.
+Pushgateway exists for batch jobs and its own docs say so.
+
+**A hand-rolled histogram is not merely unconventional, it is numerically wrong.** The old
+`quantile()` returned a bucket upper bound rather than interpolating, so 90 samples at 10ms and 10
+at 400ms produced p50 = 25ms for a true 10ms. 221 lines became 56 plus `prometheus_client`, and
+the numbers became right. This is the ponytail library test paying out: the library owns bucket
+semantics, the `_total`/`_bucket`/`_sum`/`_count` suffixes, the mandatory `le="+Inf"` bucket whose
+value must equal `_count`, escaping, and the content type.
+
+**A monotonic clock cannot be shared.** `time.monotonic()` epochs are per-process, so the old
+limiter was unshareable by construction — not merely unshared. Any distributed limiter needs wall
+clock or the server's own time. This is why the fix is a new implementation behind the same
+informal protocol rather than a parameter change.
+
+**Timeouts bound what is below them, not what is above.** `socket_connect_timeout` cannot bound
+`getaddrinfo`. Only a timeout above the resolver can.
+
+### Mistakes and corrections
+
+**I shipped a dependency change that broke the container while every local gate passed.** `uv add`
+mutates the venv in place, so `pytest`, `ruff` and `mypy` were all green while
+`docker compose build` died on `uv sync --frozen --no-dev`. `--frozen` refuses a lockfile that
+disagrees with `pyproject.toml`. Fixed by running `uv lock`; the lesson is now a rule. A related
+trap: `uv sync --frozen --no-dev` strips dev tools from the venv, so a plain `uv sync` has to
+follow before the gates can run again.
+
+**I fixed the readiness timeout three times before finding the cause.** 8294ms with retries
+disabled became 3961ms, then 3249ms after reusing a pooled client, and each time I had a plausible
+story for the remaining latency. Measuring inside the container ended the guessing:
+`getaddrinfo('redis')` fails after 3998ms once Docker removes the stopped container's DNS record.
+The right fix was one `asyncio.wait_for` at the only layer above the resolver — 1001ms against a
+1000ms budget.
+
+**My own test leaked a worker thread and quadrupled the suite time for that file.** A
+`time.sleep(30)` inside `asyncio.to_thread` survives `wait_for`, which cancels the await and not
+the thread, and Python joins non-daemon threads at exit — 1.3s of tests took 31.3s. Replaced the
+sleep with a `threading.Event` the test releases.
+
+**A test failed once immediately after `uv sync` swapped the venv.** Re-running a red test is
+normally forbidden, so the diagnosis mattered: five consecutive clean runs, four with
+`-p no:randomly`, and the only variable was the interpreter's import cache being rebuilt. Recorded
+as an environment artifact rather than dismissed.
+
+**Two mechanical edits damaged code I had just written.** One `patch` call replaced a class
+declaration with a function body because my `old_string` matched the line above it. Caught
+immediately by the syntax check, but the lesson is that a scripted edit needs the linter before the
+test suite.
+
+### Decisions
+
+**Fail open, and say why.** A Redis outage falls back to the in-process limiter rather than
+rejecting. For a public lead-capture form a dropped lead is worse than a tolerated burst, and the
+fallback still enforces a limit — there is a test asserting the fallback is not an open door. Redis
+reports as a `degraded` sub-check while the aggregate readiness status follows the database alone,
+so a Redis outage cannot mark the container unhealthy and take the API down through `depends_on`.
+
+**`limits` rather than hand-rolled Lua.** Its moving-window strategy is already atomic server-side
+Lua, tested across Redis versions, and it owns the retry-after and TTL arithmetic. Hand-rolled Lua
+would be ~60 lines to keep correct against cluster keyspace rules, clock skew and `NOSCRIPT`
+reloads after a restart.
+
+**Redis is deliberately not durable.** `--save ""`, `--appendonly no`, `--maxmemory 256mb`,
+`allkeys-lru`, and no volume. Restoring rate-limit counters older than the window is semantically
+wrong, and fork/fsync latency would sit on the request path. Eviction fails open, consistent with
+the outage policy.
+
+**Deleted a setting that did nothing.** `METRICS_MAX_SERIES` was declared in three files and read
+by none once `prometheus_client` took over cardinality. A knob an operator can turn with no effect
+is worse than no knob.
+
+### Verification
+
+```text
+uv run pytest        245 passed, five consecutive clean runs
+uv run ruff check .  All checks passed!
+uv run mypy          Success: no issues found in 97 source files
+runtime              8/8 container checks
+outage path          8294ms -> 1001ms, bounded by config
+```
+
+Transcripts in `EVIDENCE.md`.
