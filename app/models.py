@@ -64,7 +64,10 @@ class WidgetRecord(Base):
 class SubmissionRecord(Base):
     __tablename__ = "submissions"
 
-    __table_args__ = (Index("ix_submissions_tenant_id_id", "tenant_id", "id"),)
+    __table_args__ = (
+        Index("ix_submissions_tenant_id_id", "tenant_id", "id"),
+        Index("ix_submissions_tenant_id_created_at", "tenant_id", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     widget_id: Mapped[int] = mapped_column(

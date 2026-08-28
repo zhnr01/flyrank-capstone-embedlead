@@ -1,3 +1,5 @@
+from datetime import date
+
 from pydantic import BaseModel
 
 
@@ -26,7 +28,13 @@ class WidgetCountResponse(BaseModel):
     count: int
 
 
+class DailyCountResponse(BaseModel):
+    day: date
+    count: int
+
+
 class DashboardStatsResponse(BaseModel):
     total_submissions: int
     by_country: list[CountryCountResponse]
     by_widget: list[WidgetCountResponse]
+    by_day: list[DailyCountResponse]

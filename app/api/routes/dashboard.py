@@ -6,12 +6,16 @@ from app.api.auth_dependencies import get_current_identity
 from app.api.dashboard_dependencies import DashboardRepositoryDep
 from app.api.schemas.dashboard import (
     CountryCountResponse,
+    DailyCountResponse,
     DashboardStatsResponse,
     DashboardSubmission,
     DashboardSubmissionList,
     WidgetCountResponse,
 )
 from app.core.identity import Identity
+from app.repositories.dashboard import MAX_TIMESERIES_DAYS
+
+DEFAULT_STATS_DAYS = 30
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 IdentityDep = Annotated[Identity, Depends(get_current_identity)]
@@ -52,8 +56,10 @@ def list_submissions(
 def submission_stats(
     identity: IdentityDep,
     repository: DashboardRepositoryDep,
+    days: Annotated[int, Query(ge=1, le=MAX_TIMESERIES_DAYS)] = DEFAULT_STATS_DAYS,
 ) -> DashboardStatsResponse:
     stats = repository.stats(tenant_id=identity.tenant_id)
+    daily = repository.daily_counts(tenant_id=identity.tenant_id, days=days)
     return DashboardStatsResponse(
         total_submissions=stats.total_submissions,
         by_country=[
@@ -63,5 +69,8 @@ def submission_stats(
         by_widget=[
             WidgetCountResponse(widget_id=item.widget_id, count=item.count)
             for item in stats.by_widget
+        ],
+        by_day=[
+            DailyCountResponse(day=item.day, count=item.count) for item in daily
         ],
     )

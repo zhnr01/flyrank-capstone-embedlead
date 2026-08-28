@@ -1,10 +1,13 @@
 from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from typing import Protocol
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import SubmissionRecord
+
+MAX_TIMESERIES_DAYS = 365
 
 
 @dataclass(frozen=True)
@@ -17,6 +20,7 @@ class SubmissionRow:
     message: str | None
     geo_country: str | None = None
     geo_city: str | None = None
+    created_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -38,10 +42,24 @@ class WidgetCount:
 
 
 @dataclass(frozen=True)
+class DailyCount:
+    day: date
+    count: int
+
+
+@dataclass(frozen=True)
 class DashboardStats:
     total_submissions: int
     by_country: list[CountryCount]
     by_widget: list[WidgetCount]
+
+
+def window_start(days: int) -> datetime:
+    if days < 1:
+        raise ValueError("days must be at least 1")
+    if days > MAX_TIMESERIES_DAYS:
+        raise ValueError(f"days must not exceed {MAX_TIMESERIES_DAYS}")
+    return datetime.now(UTC) - timedelta(days=days)
 
 
 class DashboardRepository(Protocol):
@@ -55,6 +73,8 @@ class DashboardRepository(Protocol):
     ) -> SubmissionPage: ...
 
     def stats(self, *, tenant_id: int) -> DashboardStats: ...
+
+    def daily_counts(self, *, tenant_id: int, days: int) -> list[DailyCount]: ...
 
 
 class SqlAlchemyDashboardRepository:
@@ -141,6 +161,20 @@ class SqlAlchemyDashboardRepository:
             ],
         )
 
+    def daily_counts(self, *, tenant_id: int, days: int) -> list[DailyCount]:
+        since = window_start(days)
+        day_column = func.date_trunc("day", SubmissionRecord.created_at).label("day")
+        rows = self._session.execute(
+            select(day_column, func.count().label("total"))
+            .where(SubmissionRecord.tenant_id == tenant_id)
+            .where(SubmissionRecord.created_at >= since)
+            .group_by(day_column)
+            .order_by(day_column)
+        ).all()
+        return [
+            DailyCount(day=row.day.date(), count=int(row.total)) for row in rows
+        ]
+
 
 class InMemoryDashboardRepository:
     def __init__(self) -> None:
@@ -190,3 +224,17 @@ class InMemoryDashboardRepository:
                 )
             ],
         )
+
+    def daily_counts(self, *, tenant_id: int, days: int) -> list[DailyCount]:
+        since = window_start(days)
+        totals: dict[date, int] = {}
+        for row in self._rows:
+            if row.tenant_id != tenant_id or row.created_at is None:
+                continue
+            if row.created_at < since:
+                continue
+            day = row.created_at.date()
+            totals[day] = totals.get(day, 0) + 1
+        return [
+            DailyCount(day=day, count=totals[day]) for day in sorted(totals)
+        ]

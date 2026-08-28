@@ -692,3 +692,110 @@ uv run pytest        150 passed
 uv run ruff check .  All checks passed!
 uv run mypy          Success: no issues found in 79 source files
 ```
+
+## Unit 2A — submission counts over time (brief section 4.6)
+
+Section 4.6 asks for "counts over time". The dashboard had `total_submissions`, `by_country`
+and `by_widget`, but no time series: `created_at` existed on the table and no query used it.
+
+### Aggregation runs in SQL, not in Python
+
+`date_trunc('day', created_at)` grouped in the database, tenant-scoped in the `WHERE` clause,
+with a bounded window. Fetching rows and counting them in application memory would be unbounded
+by design.
+
+RED before implementation, on real PostgreSQL:
+
+```text
+E       AttributeError: 'SqlAlchemyDashboardRepository' object has no attribute 'daily_counts'
+```
+
+GREEN after:
+
+```text
+8 passed in 1.01s
+```
+
+The eight cases: day grouping, oldest-first ordering, cross-tenant isolation, window exclusion,
+a non-positive window, a window past the cap, an empty tenant, and agreement between the SQL and
+in-memory implementations.
+
+### The index is used, proven at realistic volume
+
+An index existing is not evidence it is used. Seeded 50,000 submissions across 400 days and
+three tenants, ran `ANALYZE`, then `EXPLAIN (ANALYZE, BUFFERS)`:
+
+```text
+Sort  (cost=747.06..748.03 rows=386 width=16) (actual time=2.679..2.681 rows=30.00 loops=1)
+  Sort Key: (date_trunc('day'::text, created_at))
+  ->  HashAggregate  (cost=725.65..730.48 rows=386 width=16) (actual time=1.706..1.710 rows=30.00 loops=1)
+        Group Key: date_trunc('day'::text, created_at)
+        ->  Bitmap Heap Scan on submissions  (cost=21.97..718.98 rows=1334 width=8) (actual time=0.275..1.585 rows=1249.00 loops=1)
+              Recheck Cond: ((tenant_id = 90) AND (created_at >= (now() - '30 days'::interval)))
+              Heap Blocks: exact=207
+              ->  Bitmap Index Scan on ix_submissions_tenant_id_created_at  (cost=0.00..21.63 rows=1334 width=0) (actual time=0.206..0.206 rows=1249.00 loops=1)
+                    Index Cond: ((tenant_id = 90) AND (created_at >= (now() - '30 days'::interval)))
+                    Buffers: shared hit=6
+Planning Time: 1.317 ms
+Execution Time: 2.930 ms
+```
+
+`Bitmap Index Scan on ix_submissions_tenant_id_created_at` — 1,249 of 50,000 rows touched, six
+buffers for the index lookup, 2.9 ms. Contrast with `ix_widgets_tenant_id_id_desc`, which the
+planner still ignores at demo volume and which remains recorded honestly in the tech-debt list.
+
+### Endpoint behaviour in the container
+
+```text
+=== GET /dashboard/stats (default window) ===
+status: 200
+keys  : ['by_country', 'by_day', 'by_widget', 'total_submissions']
+
+=== submit real leads across 3 distinct days for THIS tenant ===
+  acme rows: 3
+  by_day: [{'day': '2026-08-26', 'count': 1}, {'day': '2026-08-27', 'count': 1}, {'day': '2026-08-28', 'count': 1}]
+  sum   : 3
+  ordered oldest-first: True
+
+=== narrow window drops the older day ===
+  days=1  -> 1 point(s), sum=1
+  days=30 -> 3 point(s), sum=3
+```
+
+### Abuse cases on the new parameter
+
+```text
+=== bounds are enforced at the boundary ===
+  days=0       -> HTTP 422
+  days=-5      -> HTTP 422
+  days=366     -> HTTP 422
+  days=100000  -> HTTP 422
+
+=== a non-numeric window is rejected, not coerced ===
+  injection attempt -> HTTP 422
+  submissions table still present: 1
+
+=== stats require authentication ===
+  no token -> 401
+  bad token -> 401
+
+=== by_day is tenant-scoped: perf tenants must not appear ===
+  perf rows in db : 50000
+  acme by_day sum : 3
+  acme rows in db : 3
+```
+
+The window is capped at 365 days in two independent places: the route rejects out-of-range input
+at the HTTP boundary with 422, and `window_start()` raises `ValueError` in the repository. The
+second check is not redundant — it holds for any caller that bypasses the route.
+
+Fifty thousand rows belonging to other tenants were present in the same table throughout. The
+tenant's series summed to exactly its own three rows.
+
+### Gates
+
+```text
+uv run pytest        158 passed
+uv run ruff check .  All checks passed!
+uv run mypy          Success: no issues found in 80 source files
+```
