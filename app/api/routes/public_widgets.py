@@ -39,6 +39,7 @@ def widget_config(
         "name": widget.name,
         "kind": widget.kind,
         "version": settings.widget_bundle_version,
+        "config": widget.config.model_dump(mode="json"),
     }
     etag = content_etag(payload)
     cache_control = (

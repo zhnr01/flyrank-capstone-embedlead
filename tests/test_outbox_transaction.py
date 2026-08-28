@@ -1,8 +1,7 @@
 from collections.abc import Generator
 
 import pytest
-from sqlalchemy import create_engine, select, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -23,8 +22,9 @@ from app.repositories.submissions import (
     SqlAlchemySubmissionRepository,
 )
 
-TENANT_ID = 10
+TENANT_ID = 9010
 TOPIC = "submission.created"
+WIDGET_ID = 9001
 
 
 @pytest.fixture
@@ -34,21 +34,24 @@ def session() -> Generator[Session]:
         connect_args={"connect_timeout": settings.database_connect_timeout_seconds},
     )
     try:
-        with engine.connect() as probe:
-            probe.execute(text("SELECT 1"))
-    except OperationalError:
+        connection = engine.connect()
+    except Exception:
         pytest.skip("PostgreSQL unreachable; JSONB and SAVEPOINT need the real engine")
 
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
-    with Session(engine) as open_session:
-        open_session.add(TenantRecord(id=TENANT_ID, name="Acme"))
-        open_session.add(
-            WidgetRecord(id=1, tenant_id=TENANT_ID, name="Contact", kind="contact")
+    Base.metadata.create_all(connection)
+    connection.commit()
+    transaction = connection.begin()
+    with Session(bind=connection, join_transaction_mode="create_savepoint") as scoped:
+        scoped.merge(TenantRecord(id=TENANT_ID, name="Acme"))
+        scoped.merge(
+            WidgetRecord(
+                id=WIDGET_ID, tenant_id=TENANT_ID, name="Contact", kind="contact"
+            )
         )
-        open_session.commit()
-        yield open_session
-    Base.metadata.drop_all(engine)
+        scoped.flush()
+        yield scoped
+    transaction.rollback()
+    connection.close()
 
 
 def store_lead(session: Session, email: str) -> int:
@@ -64,7 +67,15 @@ def store_lead(session: Session, email: str) -> int:
 
 
 def stored_emails(session: Session) -> list[str]:
-    return list(session.execute(select(SubmissionRecord.email)).scalars().all())
+    return list(
+        session.execute(
+            select(SubmissionRecord.email).where(
+                SubmissionRecord.tenant_id == TENANT_ID
+            )
+        )
+        .scalars()
+        .all()
+    )
 
 
 def test_duplicate_key_does_not_destroy_the_uncommitted_submission(
@@ -86,7 +97,7 @@ def test_duplicate_key_does_not_destroy_the_uncommitted_submission(
     session.flush()
 
     duplicate = outbox.enqueue(topic=TOPIC, idempotency_key=key, payload={})
-    session.commit()
+    session.flush()
 
     assert duplicate is None
     assert stored_emails(session) == ["lostlead@example.com"]
@@ -99,7 +110,7 @@ def test_duplicate_key_leaves_exactly_one_outbox_row(session: Session) -> None:
 
     first = outbox.enqueue(topic=TOPIC, idempotency_key=key, payload={"n": 1})
     second = outbox.enqueue(topic=TOPIC, idempotency_key=key, payload={"n": 2})
-    session.commit()
+    session.flush()
 
     assert first is not None
     assert second is None
@@ -123,14 +134,23 @@ def test_session_stays_usable_after_a_duplicate(session: Session) -> None:
         idempotency_key=submission_created_key(second_id),
         payload={},
     )
-    session.commit()
+    session.flush()
 
     assert sorted(stored_emails(session)) == [
         "first@example.com",
         "second@example.com",
     ]
-    keys = session.execute(select(OutboxMessageRecord.idempotency_key)).scalars().all()
-    assert len(set(keys)) == 2
+    expected = {submission_created_key(first_id), submission_created_key(second_id)}
+    keys = (
+        session.execute(
+            select(OutboxMessageRecord.idempotency_key).where(
+                OutboxMessageRecord.idempotency_key.in_(expected)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert set(keys) == expected
 
 
 def test_both_implementations_agree_on_duplicate_enqueue(session: Session) -> None:
@@ -152,7 +172,7 @@ def test_both_implementations_agree_on_duplicate_enqueue(session: Session) -> No
     sql_second = sql_outbox.enqueue(topic=TOPIC, idempotency_key=key, payload={})
     memory_first = memory_outbox.enqueue(topic=TOPIC, idempotency_key=key, payload={})
     memory_second = memory_outbox.enqueue(topic=TOPIC, idempotency_key=key, payload={})
-    session.commit()
+    session.flush()
 
     assert (sql_first is None) == (memory_first is None)
     assert sql_second is None and memory_second is None

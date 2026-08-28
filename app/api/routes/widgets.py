@@ -14,6 +14,7 @@ from app.api.schemas.widgets import (
 from app.api.widget_dependencies import get_widget_repository
 from app.core.config import settings
 from app.core.identity import Identity
+from app.core.widget_config import default_config
 from app.repositories.widgets import WidgetRepository
 
 router = APIRouter(prefix="/widgets", tags=["widgets"])
@@ -31,6 +32,7 @@ def create_widget(
         identity=identity,
         name=payload.name,
         kind=payload.kind,
+        config=payload.config if payload.config is not None else default_config(),
     )
     return WidgetResponse.model_validate(widget)
 
@@ -88,6 +90,7 @@ def update_widget(
         widget_id=widget_id,
         name=payload.name if "name" in payload.model_fields_set else None,
         kind=payload.kind if "kind" in payload.model_fields_set else None,
+        config=payload.config if "config" in payload.model_fields_set else None,
     )
     if widget is None:
         raise HTTPException(

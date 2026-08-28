@@ -19,6 +19,7 @@ class Submission:
     geo_country: str | None = None
     geo_city: str | None = None
     geo_provider: str | None = None
+    answers: dict[str, str | None] | None = None
 
 
 class SubmissionRepository(Protocol):
@@ -31,6 +32,7 @@ class SubmissionRepository(Protocol):
         name: str,
         message: str | None,
         location: GeoLocation | None = None,
+        answers: dict[str, str | None] | None = None,
     ) -> Submission: ...
 
 
@@ -47,6 +49,7 @@ class SqlAlchemySubmissionRepository:
         name: str,
         message: str | None,
         location: GeoLocation | None = None,
+        answers: dict[str, str | None] | None = None,
     ) -> Submission:
         record = SubmissionRecord(
             widget_id=widget_id,
@@ -57,6 +60,7 @@ class SqlAlchemySubmissionRepository:
             geo_country=location.country if location else None,
             geo_city=location.city if location else None,
             geo_provider=location.provider if location else None,
+            answers=answers,
         )
         self._session.add(record)
         self._session.flush()
@@ -88,6 +92,7 @@ class InMemorySubmissionRepository:
         name: str,
         message: str | None,
         location: GeoLocation | None = None,
+        answers: dict[str, str | None] | None = None,
     ) -> Submission:
         submission = Submission(
             id=next(self._ids),
@@ -99,6 +104,7 @@ class InMemorySubmissionRepository:
             geo_country=location.country if location else None,
             geo_city=location.city if location else None,
             geo_provider=location.provider if location else None,
+            answers=answers,
         )
         self._submissions.append(submission)
         return submission

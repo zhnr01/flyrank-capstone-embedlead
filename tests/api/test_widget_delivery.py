@@ -44,11 +44,18 @@ def test_public_config_returns_minimal_payload_with_etag() -> None:
     response = client.get(f"/api/v1/public/widgets/{widget_id}/config")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "widget_id": widget_id,
-        "name": "Contact us",
-        "kind": "contact",
-        "version": settings.widget_bundle_version,
+    body = response.json()
+    assert set(body) == {"widget_id", "name", "kind", "version", "config"}
+    assert body["widget_id"] == widget_id
+    assert body["name"] == "Contact us"
+    assert body["kind"] == "contact"
+    assert body["version"] == settings.widget_bundle_version
+    assert set(body["config"]) == {
+        "title",
+        "description",
+        "submit_label",
+        "theme",
+        "fields",
     }
     assert response.headers["etag"].startswith('"')
     assert "max-age" in response.headers["cache-control"]

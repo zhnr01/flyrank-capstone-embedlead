@@ -13,10 +13,10 @@ from app.repositories.dashboard import (
     SubmissionRow,
 )
 
-TENANT_ID = 10
-OTHER_TENANT_ID = 20
-WIDGET_ID = 1
-OTHER_WIDGET_ID = 2
+TENANT_ID = 8010
+OTHER_TENANT_ID = 8020
+WIDGET_ID = 8001
+OTHER_WIDGET_ID = 8002
 DAY = (datetime.now(UTC) - timedelta(days=3)).replace(
     hour=0, minute=0, second=0, microsecond=0
 )
@@ -39,14 +39,14 @@ def session() -> Generator[Session]:
     connection.commit()
     transaction = connection.begin()
     with Session(bind=connection, join_transaction_mode="create_savepoint") as scoped:
-        scoped.add(TenantRecord(id=TENANT_ID, name="Acme"))
-        scoped.add(TenantRecord(id=OTHER_TENANT_ID, name="Rival"))
-        scoped.add(
+        scoped.merge(TenantRecord(id=TENANT_ID, name="Acme"))
+        scoped.merge(TenantRecord(id=OTHER_TENANT_ID, name="Rival"))
+        scoped.merge(
             WidgetRecord(
                 id=WIDGET_ID, tenant_id=TENANT_ID, name="Contact", kind="contact"
             )
         )
-        scoped.add(
+        scoped.merge(
             WidgetRecord(
                 id=OTHER_WIDGET_ID,
                 tenant_id=OTHER_TENANT_ID,

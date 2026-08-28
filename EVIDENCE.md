@@ -799,3 +799,132 @@ uv run pytest        158 passed
 uv run ruff check .  All checks passed!
 uv run mypy          Success: no issues found in 80 source files
 ```
+
+## Unit 2B — tenant-authored widget configuration (brief section 4.1)
+
+Section 4.1 asks that a widget carry "type, title and description, form fields, button text,
+display options". The model held only `name` and `kind`, `kind` was `Literal["contact"]`, and the
+bundle hardcoded four fields in an `innerHTML` string. This was the second and last place where
+the brief named something the code did not do.
+
+### The defect the runtime proof caught
+
+Unit tests were green and the config round-tripped, but the first container run showed:
+
+```text
+=== 6. a visitor submits the tenant-defined fields cross-origin ===
+  POST -> 422 | ACAO: http://localhost:5500
+  rows 0 -> 0
+```
+
+`SubmissionCreate` still declared a fixed `email`/`name`/`message`/`website` shape with
+`extra="forbid"`, so a visitor filling in a tenant's own fields was rejected:
+
+```text
+{"type":"missing","loc":["body","name"],"msg":"Field required"}
+{"type":"extra_forbidden","loc":["body","company"],"msg":"Extra inputs are not permitted"}
+{"type":"extra_forbidden","loc":["body","phone"],"msg":"Extra inputs are not permitted"}
+```
+
+The configuration was decorative: an owner could define fields that no visitor could submit.
+Validation had to become a function of the widget's stored config, which is
+`app/core/submission_payload.py` — twelve tests, RED first.
+
+After the fix, same probe:
+
+```text
+=== 6. a visitor submits the tenant-defined fields cross-origin ===
+  POST -> 202 | ACAO: http://localhost:5500
+  rows 0 -> 1
+```
+
+Stored row:
+
+```text
+buyer@example.com|{"email": "buyer@example.com", "phone": "+49 30 123456", "company": "Acme GmbH"}
+```
+
+### Full container transcript
+
+```text
+=== 1. migration 0008 applied: config column exists and is nullable ===
+  config|jsonb|YES
+
+=== 2. pre-existing rows survive the migration with NULL config ===
+  stored config in db : NULL
+  API still serves     : Get in touch | 3 fields
+  VERDICT: legacy NULL rows degrade to defaults, no 500
+
+=== 3. a tenant-authored config round-trips through JSONB ===
+  created -> 201
+  title       : Book a demo
+  submit_label: Request slot
+  theme       : dark
+  fields      : [('email', 'email', True), ('company', 'text', True), ('phone', 'tel', False)]
+  VERDICT: round-trip exact
+
+=== 4. the bundle is served under v2 and is immutable ===
+  v2 -> 200 | cache-control: public, max-age=31536000, immutable
+  v1 -> 404 (old version must 404)
+  innerHTML in shipped bundle: 0
+
+=== 5. changing config busts the cache; unchanged config revalidates ===
+  unchanged + If-None-Match -> 304 (expect 304)
+  after a config edit       -> ETag changed: True
+
+=== 7. abuse cases against the config surface ===
+  unknown config key     -> HTTP 422
+  unknown field prop     -> HTTP 422
+  script in field name   -> HTTP 422
+  no email field         -> HTTP 422
+  13 fields              -> HTTP 422
+  bad theme              -> HTTP 422
+  config as string       -> HTTP 422
+
+=== 8. cross-tenant config write is refused ===
+  other tenant PATCH -> HTTP 404 (expect 404)
+  title unchanged by intruder: 'Book a call instead'
+```
+
+### Why the column is nullable
+
+Adding a `NOT NULL` column to a populated table requires a default or a backfill, and either
+makes the migration harder to reverse. Nullable plus `config_from_stored()` means an existing row
+reads as the default config, proven by check 2: the row's stored config is `NULL` and the API
+still serves a usable three-field form rather than a 500.
+
+### Why the bundle builds DOM nodes instead of markup
+
+Config labels are tenant-controlled text arriving in a third-party page. The previous bundle
+assembled its form with `innerHTML`, so a title of `<img onerror=...>` would execute in the
+customer's site. `widget-v2.js` creates elements and assigns `textContent`, and a test asserts
+`innerHTML` never appears in the shipped file. A markup-shaped label is stored and rendered
+verbatim as text, which `test_markup_in_labels_is_stored_verbatim_not_interpreted` pins.
+
+The version moved `v1` -> `v2` in all three required places — `app/core/config.py`,
+`.env.example`, `compose.yaml` — and `v1` now 404s, so the immutable cache entry cannot serve
+stale JavaScript against a new config shape.
+
+### Migration safety, replayed from empty
+
+```text
+Running upgrade ... -> 0009_submission_answers   (9 of 9 applied)
+columns present (widgets.config, submissions.answers): 2
+```
+
+### Test-fixture defect fixed at the source
+
+`tests/test_outbox_transaction.py` used `Base.metadata.drop_all` against the shared development
+database, which twice wiped the schema while leaving `alembic_version` stamped — so
+`alembic upgrade head` became a silent no-op and the container crash-looped on a missing
+relation. Both real-engine fixtures now open a connection, `create_all`, and run inside an outer
+transaction with `join_transaction_mode="create_savepoint"` that is rolled back on teardown. No
+test can destroy the schema any more. The rule is recorded in `docs/rules.md`.
+
+### Gates
+
+```text
+uv run pytest        196 passed
+uv run ruff check .  All checks passed!
+uv run mypy          Success: no issues found in 88 source files
+```

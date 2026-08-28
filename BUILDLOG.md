@@ -388,3 +388,85 @@ runtime proof        UNIT 0: ALL RUNTIME CHECKS PASSED
 ```
 
 Full transcripts in `EVIDENCE.md`.
+
+## Session 8 — Unit 2: the two real gaps against the brief
+
+Two units, both places where the brief named something the code did not do: submission counts
+over time (section 4.6) and tenant-authored widget configuration (section 4.1).
+
+### Concept learned
+
+**Aggregate in the database, bound the window, then prove the index.** `date_trunc` grouped in
+SQL keeps the result set proportional to the number of days, not the number of rows. The bound is
+enforced twice on purpose: the route rejects an out-of-range `days` at the HTTP boundary, and
+`window_start()` raises `ValueError` for any caller that does not come through the route. An
+index existing is not evidence it is used, so the plan was measured at 50,000 rows rather than at
+demo volume.
+
+**A configuration that cannot be submitted is decoration.** The interesting part of Unit 2B was
+not storing JSONB, it was that validation of an inbound submission had to become a function of
+the widget's own stored config. A fixed Pydantic model with `extra="forbid"` is exactly right
+when the shape is known at build time, and exactly wrong when a tenant defines the shape at
+runtime.
+
+**Tenant text rendered in a third-party page is an injection sink.** The old bundle built its
+form with `innerHTML`. Once titles and labels became tenant-controlled, that string became
+executable in the customer's own site. Building DOM nodes and assigning `textContent` is the fix,
+and a test asserts `innerHTML` never reappears in the shipped file.
+
+### Mistakes and corrections
+
+**The green suite hid a broken feature.** Unit 2B's 18 API tests passed and I nearly moved on.
+The container proof showed a visitor submitting the tenant's own fields got `422` — the config was
+unusable by design. Tests written against the config surface could not see it because none of
+them submitted a lead through a customised widget. Fixed by adding
+`app/core/submission_payload.py` with twelve RED-first tests, then routing the submission path
+through it.
+
+**My own test fixture destroyed the development database twice.** `Base.metadata.drop_all`
+against the shared volume left every table gone while `alembic_version` stayed stamped, so
+`alembic upgrade head` reported success and did nothing, and the backend crash-looped on
+`relation "widgets" does not exist`. I recovered it once, wrote the lesson down, then hit the same
+failure again from a second fixture I had written the same way. The second time I fixed the cause
+instead of the symptom: both real-engine fixtures now run inside an outer transaction with
+`join_transaction_mode="create_savepoint"` and roll back on teardown.
+
+**A stray host process silently broke a container build.** An interrupted verification run leaves
+a process bound to port 8000. The next rebuild had nothing to bind, and `docker compose ps` showed
+no backend while a request to port 8000 still answered 200 — the reply was coming from the orphan.
+Diagnosed with `netstat`, killed the PID, rebuilt.
+
+**Rewriting a schema file dropped a class other modules imported.** Replacing
+`app/api/schemas/widgets.py` wholesale lost `WidgetEmbedResponse`. Caught immediately by the
+import error, but the lesson is to patch a file rather than rewrite it when other modules import
+from it.
+
+### Decisions
+
+**`config` and `answers` are nullable JSONB, not `NOT NULL` with a default.** A nullable column
+is a reversible migration on a populated table, and `config_from_stored()` turns a legacy `NULL`
+into the default config. Check 2 of the proof exercises exactly that path.
+
+**Validated Pydantic models in `app/core/`, not raw dicts.** `WidgetConfig` lives in core beside
+the domain, and pydantic is already a core dependency while FastAPI is not — so the layer rule in
+`docs/architecture.md` still holds. A grep for FastAPI imports under `app/core/` remains empty.
+
+**One named type per concept.** `WidgetKind`, `FieldKind`, `WidgetTheme` are declared once in
+`app/core/widget_config.py` and imported everywhere else. Adding the second widget kind was a
+one-line change to a single `Literal`, which is the whole point of the earlier remediation.
+
+**At least one `email` field is required by a model validator.** A lead-capture widget with no way
+to contact the lead is not a valid configuration, so the invariant belongs in the type rather than
+in a route.
+
+### Verification
+
+```text
+uv run pytest        196 passed
+uv run ruff check .  All checks passed!
+uv run mypy          Success: no issues found in 88 source files
+runtime              8/8 container checks passed
+migrations           9 of 9 replayed on an empty database
+```
+
+Transcripts in `EVIDENCE.md`.

@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.auth import get_password_hash
 from app.core.db import engine
+from app.core.widget_config import default_config
 from app.models import MembershipRecord, TenantRecord, UserRecord, WidgetRecord
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -58,6 +59,7 @@ def seed() -> None:
                         tenant_id=tenant_id,
                         name=name,
                         kind=kind,
+                        config=default_config().model_dump(mode="json"),
                     )
                 )
         session.commit()

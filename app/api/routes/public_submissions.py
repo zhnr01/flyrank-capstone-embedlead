@@ -8,12 +8,13 @@ from app.api.rate_limit_dependencies import (
     client_address,
     enforce_submission_rate_limits,
 )
-from app.api.schemas.submissions import SubmissionAccepted, SubmissionCreate
+from app.api.schemas.submissions import SubmissionAccepted
 from app.api.submission_dependencies import SubmissionRepositoryDep
 from app.api.widget_dependencies import WidgetRepositoryDep
 from app.core.geo import GeoLocation, GeoProviderChain
 from app.core.metrics import increment
 from app.core.outbox import submission_created_key
+from app.core.submission_payload import validate_against_config
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/public", tags=["public"])
@@ -41,7 +42,7 @@ def enrich_without_failing(
 )
 def create_submission(
     widget_id: int,
-    payload: SubmissionCreate,
+    payload: dict[str, object],
     request: Request,
     widgets: WidgetRepositoryDep,
     submissions: SubmissionRepositoryDep,
@@ -56,7 +57,23 @@ def create_submission(
             detail="Widget not found",
         )
 
-    if payload.looks_automated:
+    widget = widgets.get_public(widget_id=widget_id)
+    if widget is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Widget not found",
+        )
+
+    try:
+        answers = validate_against_config(payload, config=widget.config)
+    except ValueError as error:
+        increment("submission_rejected", "invalid_payload")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(error),
+        ) from None
+
+    if answers.looks_automated:
         increment("submission_dropped", "honeypot")
         logger.warning(
             "honeypot_triggered",
@@ -70,10 +87,11 @@ def create_submission(
     submission = submissions.create(
         widget_id=ownership.id,
         tenant_id=ownership.tenant_id,
-        email=str(payload.email),
-        name=payload.name,
-        message=payload.message,
+        email=answers.email,
+        name=answers.name,
+        message=answers.message,
         location=location,
+        answers=answers.values,
     )
     outbox.enqueue(
         topic="submission.created",

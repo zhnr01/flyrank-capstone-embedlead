@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -59,6 +60,7 @@ class WidgetRecord(Base):
     )
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    config: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
 
 class SubmissionRecord(Base):
@@ -81,6 +83,7 @@ class SubmissionRecord(Base):
     geo_country: Mapped[str | None] = mapped_column(String(2), nullable=True)
     geo_city: Mapped[str | None] = mapped_column(String(120), nullable=True)
     geo_provider: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    answers: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

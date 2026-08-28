@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.identity import Identity
+from app.core.widget_config import WidgetConfig, WidgetKind, default_config
 from app.models import WidgetRecord
 
 
@@ -14,6 +15,7 @@ class Widget:
     id: int
     name: str
     kind: str
+    config: WidgetConfig
 
 
 @dataclass(frozen=True)
@@ -28,8 +30,21 @@ class WidgetPage:
     next_after_id: int | None
 
 
+def config_from_stored(stored: object) -> WidgetConfig:
+    if not isinstance(stored, dict):
+        return default_config()
+    return WidgetConfig.model_validate(stored)
+
+
 class WidgetRepository(Protocol):
-    def create(self, *, identity: Identity, name: str, kind: str) -> Widget: ...
+    def create(
+        self,
+        *,
+        identity: Identity,
+        name: str,
+        kind: WidgetKind,
+        config: WidgetConfig,
+    ) -> Widget: ...
 
     def get_for_tenant(
         self,
@@ -52,7 +67,8 @@ class WidgetRepository(Protocol):
         identity: Identity,
         widget_id: int,
         name: str | None,
-        kind: str | None,
+        kind: WidgetKind | None,
+        config: WidgetConfig | None,
     ) -> Widget | None: ...
 
     def delete_for_tenant(self, *, identity: Identity, widget_id: int) -> bool: ...
@@ -66,11 +82,19 @@ class SqlAlchemyWidgetRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def create(self, *, identity: Identity, name: str, kind: str) -> Widget:
+    def create(
+        self,
+        *,
+        identity: Identity,
+        name: str,
+        kind: WidgetKind,
+        config: WidgetConfig,
+    ) -> Widget:
         record = WidgetRecord(
             tenant_id=identity.tenant_id,
             name=name,
             kind=kind,
+            config=config.model_dump(mode="json"),
         )
         self._session.add(record)
         self._session.commit()
@@ -117,7 +141,8 @@ class SqlAlchemyWidgetRepository:
         identity: Identity,
         widget_id: int,
         name: str | None,
-        kind: str | None,
+        kind: WidgetKind | None,
+        config: WidgetConfig | None,
     ) -> Widget | None:
         record = self._get_record(identity=identity, widget_id=widget_id)
         if record is None:
@@ -126,6 +151,8 @@ class SqlAlchemyWidgetRepository:
             record.name = name
         if kind is not None:
             record.kind = kind
+        if config is not None:
+            record.config = config.model_dump(mode="json")
         self._session.commit()
         self._session.refresh(record)
         return self._to_widget(record)
@@ -167,15 +194,26 @@ class SqlAlchemyWidgetRepository:
                 WidgetRecord.id,
                 WidgetRecord.name,
                 WidgetRecord.kind,
+                WidgetRecord.config,
             ).where(WidgetRecord.id == widget_id)
         ).one_or_none()
         if row is None:
             return None
-        return Widget(id=row.id, name=row.name, kind=row.kind)
+        return Widget(
+            id=row.id,
+            name=row.name,
+            kind=row.kind,
+            config=config_from_stored(row.config),
+        )
 
     @staticmethod
     def _to_widget(record: WidgetRecord) -> Widget:
-        return Widget(id=record.id, name=record.name, kind=record.kind)
+        return Widget(
+            id=record.id,
+            name=record.name,
+            kind=record.kind,
+            config=config_from_stored(record.config),
+        )
 
 
 class InMemoryWidgetRepository:
@@ -183,8 +221,20 @@ class InMemoryWidgetRepository:
         self._widgets: dict[tuple[int, int], Widget] = {}
         self._ids = count(1)
 
-    def create(self, *, identity: Identity, name: str, kind: str) -> Widget:
-        widget = Widget(id=next(self._ids), name=name, kind=kind)
+    def create(
+        self,
+        *,
+        identity: Identity,
+        name: str,
+        kind: WidgetKind,
+        config: WidgetConfig,
+    ) -> Widget:
+        widget = Widget(
+            id=next(self._ids),
+            name=name,
+            kind=kind,
+            config=config_from_stored(config.model_dump(mode="json")),
+        )
         self._widgets[(identity.tenant_id, widget.id)] = widget
         return widget
 
@@ -221,7 +271,8 @@ class InMemoryWidgetRepository:
         identity: Identity,
         widget_id: int,
         name: str | None,
-        kind: str | None,
+        kind: WidgetKind | None,
+        config: WidgetConfig | None,
     ) -> Widget | None:
         key = (identity.tenant_id, widget_id)
         widget = self._widgets.get(key)
@@ -231,6 +282,11 @@ class InMemoryWidgetRepository:
             widget,
             name=name if name is not None else widget.name,
             kind=kind if kind is not None else widget.kind,
+            config=(
+                config_from_stored(config.model_dump(mode="json"))
+                if config is not None
+                else widget.config
+            ),
         )
         self._widgets[key] = updated
         return updated
