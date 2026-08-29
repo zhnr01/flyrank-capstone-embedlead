@@ -1,8 +1,9 @@
 from datetime import timedelta
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.membership_dependencies import MembershipRepositoryDep
+from app.api.rate_limit_dependencies import enforce_login_rate_limit
 from app.api.schemas.auth import TokenRequest, TokenResponse
 from app.api.user_dependencies import UserRepositoryDep
 from app.core.auth import create_access_token, get_password_hash, verify_password
@@ -12,7 +13,11 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 DUMMY_PASSWORD_HASH = get_password_hash("dummy-password-for-unknown-users")
 
 
-@router.post("/token", response_model=TokenResponse)
+@router.post(
+    "/token",
+    response_model=TokenResponse,
+    dependencies=[Depends(enforce_login_rate_limit)],
+)
 def create_token(
     payload: TokenRequest,
     users: UserRepositoryDep,

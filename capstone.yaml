@@ -10,7 +10,7 @@ endpoints:
   widgets: "/api/v1/widgets"
   widget_embed: "/api/v1/widgets/{widget_id}/embed"
   widget_config: "/api/v1/public/widgets/{widget_id}/config"
-  widget_script: "/api/v1/public/widgets/bundle/v1/widget.js"
+  widget_script: "/api/v1/public/widgets/bundle/v2/widget.js"
   submissions: "/api/v1/public/widgets/{widget_id}/submissions"
   dashboard: "/api/v1/dashboard/submissions"
 demo_page: "demo/index.html"

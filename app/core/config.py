@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     submission_rate_limit_per_ip: int = Field(default=5, gt=0, le=10_000)
     submission_rate_limit_per_widget: int = Field(default=30, gt=0, le=100_000)
     submission_rate_limit_window_seconds: int = Field(default=60, gt=0, le=3_600)
+    login_rate_limit_per_ip: int = Field(default=10, gt=0, le=10_000)
+    login_rate_limit_window_seconds: int = Field(default=300, gt=0, le=3_600)
     rate_limit_max_tracked_keys: int = Field(default=10_000, gt=0)
     redis_url: str = ""
     redis_socket_timeout_seconds: float = Field(default=0.25, gt=0, le=10)

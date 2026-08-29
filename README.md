@@ -21,7 +21,7 @@ A backend capstone for serving embeddable lead-capture widgets and safely accept
 - Login token endpoint with generic credential failures and membership gating.
 - Complete tenant-scoped widget lifecycle: create, read, cursor-paginated list, partial update, delete.
 - Public cross-origin submission endpoint with CORS preflight, boundary validation, and a payload size guard.
-- Abuse protection: per-IP and per-widget sliding-window rate limits with `Retry-After`, plus a honeypot spam control.
+- Abuse protection: per-IP and per-widget sliding-window rate limits with `Retry-After`, a separate per-IP budget on the login endpoint so credential guessing is bounded, plus a honeypot spam control.
 - Advisory IP geo enrichment with an ordered provider fallback chain that degrades to a stored row with no location.
 - Transactional outbox with a separate worker process: notifications are at-least-once, idempotent, and can never lose a lead.
 - Cached widget delivery: content-hash ETag with `304` revalidation, an immutably versioned bundle, and a per-widget embed snippet.
@@ -332,6 +332,7 @@ Allowed origins come from `BACKEND_CORS_ORIGINS`. CORS is a browser policy, not 
 |---|---|
 | per-IP rate limit | `SUBMISSION_RATE_LIMIT_PER_IP` requests per window, keyed on the socket peer |
 | per-widget rate limit | `SUBMISSION_RATE_LIMIT_PER_WIDGET` requests per window |
+| per-IP login limit | `LOGIN_RATE_LIMIT_PER_IP` attempts per `LOGIN_RATE_LIMIT_WINDOW_SECONDS`, so credential guessing is bounded |
 | over the limit | `429` with `Retry-After` in seconds; the body does not reveal which limit tripped |
 | honeypot | a populated `website` field returns the ordinary `202` and stores nothing |
 

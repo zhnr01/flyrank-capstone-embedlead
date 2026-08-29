@@ -16,26 +16,28 @@ logger = logging.getLogger(__name__)
 
 IP_SCOPE = "ip"
 WIDGET_SCOPE = "widget"
+LOGIN_SCOPE = "login"
 UNKNOWN_ADDRESS = "unknown"
 
 
-def _in_process(limit: int) -> RateLimiter:
+def _in_process(limit: int, window_seconds: int) -> RateLimiter:
     return RateLimiter(
         limit=limit,
-        window_seconds=settings.submission_rate_limit_window_seconds,
+        window_seconds=window_seconds,
         max_keys=settings.rate_limit_max_tracked_keys,
     )
 
 
-def build_limiter(limit: int) -> RateLimiterProtocol:
-    fallback = _in_process(limit)
+def build_limiter(limit: int, window_seconds: int | None = None) -> RateLimiterProtocol:
+    window = window_seconds or settings.submission_rate_limit_window_seconds
+    fallback = _in_process(limit, window)
     if not settings.redis_url:
         return fallback
     try:
         shared = RedisRateLimiter(
             redis_client=shared_redis_client(settings.redis_url),
             limit=limit,
-            window_seconds=settings.submission_rate_limit_window_seconds,
+            window_seconds=window,
         )
     except Exception:
         logger.warning(
@@ -50,20 +52,28 @@ _ip_limiter: RateLimiterProtocol = build_limiter(settings.submission_rate_limit_
 _widget_limiter: RateLimiterProtocol = build_limiter(
     settings.submission_rate_limit_per_widget
 )
+_login_limiter: RateLimiterProtocol = build_limiter(
+    settings.login_rate_limit_per_ip, settings.login_rate_limit_window_seconds
+)
 
 
 def reset_rate_limiters() -> None:
-    global _ip_limiter, _widget_limiter
+    global _ip_limiter, _widget_limiter, _login_limiter
     _ip_limiter.reset()
     _widget_limiter.reset()
+    _login_limiter.reset()
     _ip_limiter = build_limiter(settings.submission_rate_limit_per_ip)
     _widget_limiter = build_limiter(settings.submission_rate_limit_per_widget)
+    _login_limiter = build_limiter(
+        settings.login_rate_limit_per_ip, settings.login_rate_limit_window_seconds
+    )
 
 
 def close_rate_limiters() -> None:
-    global _ip_limiter, _widget_limiter
+    global _ip_limiter, _widget_limiter, _login_limiter
     _ip_limiter.close()
     _widget_limiter.close()
+    _login_limiter.close()
 
 
 def client_address(request: Request) -> str:
@@ -95,3 +105,25 @@ def enforce_submission_rate_limits(request: Request, widget_id: int) -> None:
                 detail="Too many submissions, retry later",
                 headers={"Retry-After": str(decision.retry_after_seconds)},
             )
+
+
+def enforce_login_rate_limit(request: Request) -> None:
+    address = client_address(request)
+    decision = _login_limiter.check(f"{LOGIN_SCOPE}:{address}")
+    if decision.allowed:
+        return
+    increment("login_rate_limited", LOGIN_SCOPE)
+    logger.warning(
+        "login_rate_limited",
+        extra={
+            "fields": {
+                "scope": LOGIN_SCOPE,
+                "retry_after": decision.retry_after_seconds,
+            }
+        },
+    )
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail="Too many login attempts, retry later",
+        headers={"Retry-After": str(decision.retry_after_seconds)},
+    )

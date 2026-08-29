@@ -2016,3 +2016,153 @@ uv run python scripts/rehearsal.py
 Roughly two minutes wall-clock, because it deliberately stops Redis, restarts the backend and waits
 for readiness between phases. A live six-minute demo follows the same twenty-one steps with narration
 in place of assertions; this transcript is the script for it.
+
+## Post-review security sweep — the login gap, found by the user
+
+The user asked two questions that a review battery should have asked first: does the brief require
+account creation, and is `/auth/token` rate limited. The second one was a real hole.
+
+### The gap: an unthrottled credential-guessing endpoint
+
+`enforce_submission_rate_limits` was applied to the public submission route and nowhere else.
+`/auth/token` — the other unauthenticated, internet-facing entry point, and the one that guards
+credentials — had no limiter at all. Verified exploitable before touching anything:
+
+```text
+40 consecutive wrong-password attempts against /auth/token:
+  distinct status codes : [401]
+  any 429 (throttled)?  : False
+  all 401 (unthrottled)?: True
+```
+
+Two attack surfaces in one omission. Credential guessing at network speed, and CPU exhaustion —
+argon2 is deliberately ~100 ms per verify, so an unthrottled login is also a cheap way to burn every
+worker the container has.
+
+**Why the reviews missed it.** The nine abuse cases were run against the public submission path only,
+because that is where the brief points. The Authentication lane was marked covered on the strength of
+opaque 401 bodies — but an opaque error body is not brute-force protection. Checking the *shape* of a
+failure and never asking *how many times it can be requested* is the whole mistake.
+
+### The fix
+
+A separate per-IP budget (`LOGIN_RATE_LIMIT_PER_IP`, default 10 per 300 s), deliberately not shared
+with the submission budget: form visitors and password guessers are different populations at
+different rates, and one bucket would either throttle real form traffic or leave login as loose as a
+public endpoint. `build_limiter` gained a window parameter instead of hardcoding the submission
+window. Five tests, RED first:
+
+```text
+tests/api/test_login_abuse.py
+  4 failed, 1 passed          (before)
+  5 passed                    (after)
+```
+
+Live against the container, the throttle engages exactly at the configured limit:
+
+```text
+[PASS] EX1 credential guessing is throttled  [401, 429] first429@11
+```
+
+Rejected: account lockout after N failures. It converts a guessing attack into a denial-of-service
+attack against a named user — an attacker who knows an address locks its owner out at will.
+
+### Account creation is not a requirement
+
+Checked because the user asked. Every "signup" in the brief refers to the *widget type* a customer
+builds ("signup forms, contact forms, call-to-action popovers"), never to user registration. §6 asks
+for "Authenticated CRUD endpoints for widgets; requests without valid auth are rejected" — an
+authentication requirement. There is no registration endpoint in the Definition of Done, and seeded
+tenants satisfy it.
+
+### All 16 Definition-of-Done requirements, re-verified live
+
+Not from memory — extracted verbatim from the PDF and probed against the running stack:
+
+```text
+[WIDGET MANAGEMENT]
+  [PASS] WM1 unauthenticated CRUD rejected            GET /widgets -> 401
+  [PASS] WM1 unauthenticated create rejected          POST -> 401
+  [PASS] WM1 unauthenticated update rejected          PATCH -> 401
+  [PASS] WM1 unauthenticated delete rejected          DELETE -> 401
+  [PASS] WM1 authenticated list works                 -> 200
+  [PASS] WM2 cross-tenant widget is 404               -> 404
+  [PASS] WM3 embed snippet generated                  <script src="...widget.js">
+[WIDGET DELIVERY]
+  [PASS] WD1 config 200 with cache headers            public, max-age=60, must-revalidate
+  [PASS] WD1 config payload is small                  373 bytes
+  [PASS] WD1 config carries an ETag
+  [PASS] WD1 conditional GET returns 304              -> 304
+  [PASS] WD2 versioned bundle served                  v2 -> 200
+  [PASS] WD2 bundle immutable-cached                  max-age=31536000, immutable
+  [PASS] WD2 old version is gone (cache-bust)         v1 -> 404
+[PUBLIC SUBMISSION API]
+  [PASS] PS1 preflight allows the listed origin       200
+  [PASS] PS1 preflight denies an unlisted origin      no grant
+  [PASS] PS3 valid submission stored                  202, 12->13
+  [PASS] PS3 linked to right widget and tenant        widget/tenant=1/10
+  [PASS] PS2 malformed -> 4xx JSON, not 500           -> 422
+  [PASS] PS2 error body is JSON
+  [PASS] PS2 oversized -> 413/422                     -> 413
+[ABUSE PROTECTION]
+  [PASS] AP1 burst yields 429                         [202,202,202,202,202,429,429,429,429]
+  [PASS] AP1 429 advertises Retry-After               44
+  [PASS] AP1 legitimate traffic still served          -> 202
+  [PASS] AP2 honeypot blocks spam silently            202, 19->19
+[LOGIN ABUSE]
+  [PASS] EX1 credential guessing is throttled         first429@11
+
+26/26 checks passed
+```
+
+### Adversarial battery — 17 attacks, no holes
+
+Beyond the Definition of Done, attacks the earlier reviews had not attempted:
+
+```text
+[SAFE] tampered signature rejected              -> 401
+[SAFE] alg=none forgery rejected                -> 401
+[SAFE] missing Bearer scheme rejected           -> 401
+[SAFE] empty token rejected                     -> 401
+[SAFE] client-supplied tenant_id rejected       -> 422  (extra fields forbidden)
+[SAFE] SQL metacharacters stored inertly        -> 202
+[SAFE] broken JSON -> 4xx not 500               -> 422
+[SAFE] empty body -> 4xx not 500                -> 422
+[SAFE] wrong JSON root type -> 4xx              -> 422
+[SAFE] unknown widget -> 404 not 500            -> 404
+[SAFE] unknown vs known email identical status  401 vs 401
+[SAFE] cross-tenant 404 leaks nothing           {"detail":"Widget not found"}
+[SAFE] metrics need a token                     -> 401
+[SAFE] path traversal in bundle version         -> 404
+[SAFE] X-Forwarded-For not trusted for limiting -> 202
+```
+
+One flagged as a hole on the first run — the forged `tenant_id` case — was my probe misreading a 422
+whose body echoes the offending field name. The schema forbids extra fields, so the forgery is
+rejected before it reaches any logic. Verified separately rather than assumed.
+
+### Manifest defect found in the same pass
+
+`capstone.yaml` pointed the evaluator's probe at `bundle/v1/widget.js`. Unit 2B deleted v1, and a
+test asserts it returns 404 — so the manifest was sending the grader to a dead URL. Now `v2`.
+
+### Harness
+
+A new lane fails the build if any unauthenticated write route lacks a rate limit, and a second
+requires a test asserting the login throttle. Mutation-tested: removing the dependency from
+`auth.py` produces `MISSING app/api/routes/auth.py has an unauthenticated write with NO rate limit`
+and `HARNESS FAILED`.
+
+Writing that lane also exposed a bug in the harness itself — the script tracks failure in `fail`, and
+the new checks set `FAIL`, a different variable. The guard could never have failed the build. Fixed,
+then mutation-tested again to prove it bites.
+
+### Gates
+
+```text
+uv run pytest        259 passed
+uv run ruff check .  All checks passed!
+uv run mypy          Success: no issues found in 101 source files
+runtime              26/26 DoD checks, 17/17 attacks safe, 4/4 services healthy
+harness              HARNESS VERIFIED
+```

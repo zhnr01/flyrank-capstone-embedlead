@@ -823,3 +823,90 @@ specs                27 done / 0 open
 ```
 
 Both transcripts in `EVIDENCE.md`, including the per-concern mapping table.
+
+## Session 13 — the login endpoint had no rate limit, and the user found it
+
+Two questions from the user: does the brief require account creation, and is `/auth/token` rate
+limited. The first was a no. The second was a real security hole that three audits and a "final
+review" had all walked past.
+
+### The hole
+
+`enforce_submission_rate_limits` was wired onto the public submission route and nowhere else. The
+login endpoint accepted unlimited attempts:
+
+```text
+40 consecutive wrong-password attempts: [401] x40, never a 429
+```
+
+Two surfaces in one omission — credential guessing at network speed, and CPU exhaustion, because
+argon2 is deliberately ~100 ms per verify, so every guess burns a worker for a tenth of a second.
+
+### Why I missed it, precisely
+
+The battery's nine abuse cases were run against the public submission path, because that is the path
+the brief discusses at length. The Authentication lane was ticked on the strength of opaque 401 bodies
+and a correct constant-time comparison. Both of those are real controls — and neither is brute-force
+protection. I verified the *shape* of a failure and never asked *how many times it could be
+requested*. "Is it rate limited?" is a per-endpoint question; I had answered it once, for the project.
+
+### Concepts learned
+
+**An auth endpoint is an abuse surface before it is an auth surface.** The timing defence and the
+opaque error body protect against *enumeration*. Neither bounds *volume*. Different attacks, different
+controls, and getting one right creates a false sense of having covered the other.
+
+**Separate budgets for separate populations.** The login limit is its own bucket (10 per 300 s) rather
+than sharing the submission budget. Form visitors and password guessers behave differently; one shared
+bucket would either throttle real form traffic to protect login or leave login as loose as a public
+endpoint. The windows differ too — credential guessing is a slow, patient attack.
+
+**Lockout is worse than throttling.** Rejected account lockout after N failures: it converts a guessing
+attack into a denial-of-service attack against a named user. IP throttling degrades the attacker
+without handing them a weapon.
+
+### Mistakes and corrections
+
+**My harness guard set the wrong variable.** I wrote `FAIL=1`; the script tracks `fail`. The new lane
+printed its warning and the build passed anyway — a guard that could never fail. Found by mutation
+testing, which is the only reason it did not ship as decoration.
+
+**I spent three attempts introspecting routes with broken assumptions.** `app.routes` returned ten
+entries and zero `APIRoute`, because this FastAPI version wraps `include_router` in `_IncludedRouter`
+objects. Two rewrites later I stopped guessing and used `app.openapi()` — the app's own source of
+truth — which listed all fifteen operations immediately. The lesson is to reach for the documented
+interface before writing a tree walker.
+
+**One "hole" in the attack battery was my probe misreading a 422.** The forged `tenant_id` case looked
+like a leak because the 422 body echoes the offending field name. The schema forbids extra fields, so
+the forgery is rejected before reaching any logic. Verified separately rather than assumed — reporting
+a false vulnerability is its own kind of damage.
+
+**The user's comments in `auth.py` broke the no-comments house rule.** Rather than delete the
+explanation, the rationale moved to `docs/decisions.md` with the measured timing numbers, which is
+where a reviewer will actually look for a design justification.
+
+### Decisions
+
+**Account creation stays out.** Every "signup" in the brief refers to the widget type a customer
+builds. §6 asks for authenticated CRUD with unauthenticated requests rejected — an authentication
+requirement, not a registration one. Seeded tenants satisfy it, and inventing a registration endpoint
+would add an unaudited public write surface for no graded benefit.
+
+**`capstone.yaml` pointed the grader at a dead URL.** `widget_script` still named
+`bundle/v1/widget.js`, which Unit 2B deleted and a test asserts returns 404. Fixed to v2.
+
+### Verification
+
+```text
+uv run pytest        266 passed
+uv run ruff check .  All checks passed!
+uv run mypy          Success: no issues found in 101 source files
+live container       26/26 Definition-of-Done checks
+                     17/17 adversarial probes safe
+                     login throttle engages at attempt 11 of a 10-attempt budget
+harness              HARNESS VERIFIED
+```
+
+Full transcripts in `EVIDENCE.md`, including all sixteen §6 requirements extracted verbatim from the
+brief and probed against the running stack rather than recalled.
