@@ -4,7 +4,7 @@ A backend capstone for serving embeddable lead-capture widgets and safely accept
 
 > Project status: the required capstone core is implemented and proven end to end — authentication, tenant-isolated widget CRUD, cached public delivery, cross-origin submissions, abuse protection, geo enrichment, transactional-outbox notifications, an owner dashboard, and request-scoped observability. Remaining work is deployment hardening, not missing features; see [Limitations](#limitations).
 
-## Implemented now
+## System status
 
 - FastAPI application running on Python 3.14.
 - Separate liveness and readiness endpoints.
@@ -15,7 +15,7 @@ A backend capstone for serving embeddable lead-capture widgets and safely accept
 - Backend container running as an unprivileged user.
 - Automated API and failure-path tests, Ruff linting, and strict mypy checks.
 - Tenant-scoped widget create/read endpoints backed by a PostgreSQL migration.
-- A signed-authentication foundation proving authorization behavior before a login endpoint exists.
+- Signed authentication with Argon2 credentials, expiring JWTs, membership gating, and login abuse protection.
 - Argon2 password hashing and signed, expiring access-token verification.
 - Persistent tenant, user, and membership authority tables.
 - Login token endpoint with generic credential failures and membership gating.
@@ -29,11 +29,11 @@ A backend capstone for serving embeddable lead-capture widgets and safely accept
 - A second-origin demo page and a deterministic seed command, so the whole flow is reproducible in a browser.
 - Operable observability: JSON logs with a propagated request id, redaction of sensitive fields, and a token-protected metrics endpoint with bounded label cardinality.
 
-## Why this system exists
+## System boundary
 
-An embedded form runs in a browser on someone else's website. That changes the backend boundary: the browser origin is external, submissions are untrusted, traffic can be abusive, and optional providers can fail.
+EmbedLead accepts untrusted browser traffic from tenant-controlled origins and persists tenant-scoped leads. The design separates authenticated owner operations, public cached delivery, and public submission processing. External geo and notification providers are non-critical dependencies.
 
-The finished platform will separate three request paths:
+The platform separates three request paths:
 
 ```text
 Widget owner
@@ -52,11 +52,11 @@ Website visitor
   -> non-critical notification work
 ```
 
-The process/database health path and the first tenant/widget ownership path are implemented today. The remaining paths are documented design targets, not completed features.
+All three request paths are implemented and proven: authenticated widget management, public cached widget delivery, and protected cross-origin submission with persistence, enrichment, and asynchronous notification work.
 
 ## Architecture
 
-The current tracer keeps HTTP behavior, health decisions, and database infrastructure separate:
+The implementation keeps HTTP adapters, application services, domain policy, repositories, and infrastructure separate. The health path is representative:
 
 ```text
 HTTP request
@@ -82,22 +82,22 @@ PostgreSQL 18
 - `app/repositories/widgets.py` owns tenant-scoped widget persistence.
 - `app/alembic/versions/0001_create_widgets.py` owns the first product schema migration.
 
-See [`docs/DESIGN.md`](docs/DESIGN.md) for the complete planned architecture, trust boundaries, data model, API surface, and explicit non-goals.
+See [`docs/DESIGN.md`](docs/DESIGN.md) for the architecture, trust boundaries, data model, API surface, implementation status, and explicit non-goals.
 
-## Requirements
+## Runtime requirements
 
 - Docker Desktop with Docker Compose, or
 - Python 3.14 and [`uv`](https://docs.astral.sh/uv/) for local checks.
 
 No paid service or cloud account is required.
 
-## Run with Docker
+## Runbook
 
 ```bash
 docker compose up --build --wait
 ```
 
-The `--wait` flag returns only after PostgreSQL and the backend readiness check report healthy.
+`--wait` waits for the Compose healthchecks. PostgreSQL is checked with `pg_isready`; the backend healthcheck probes process liveness. Readiness is the traffic-gating endpoint and additionally checks database availability.
 
 Open:
 
@@ -114,9 +114,9 @@ docker compose down
 
 The PostgreSQL volume is preserved. Use `docker compose down --volumes` only when you intentionally want to delete local database data.
 
-## Local quality checks
+## Verification
 
-Install the locked development environment:
+Install the locked development environment and run the repository gates:
 
 ```bash
 uv sync --python 3.14 --group dev
@@ -131,22 +131,24 @@ uv run mypy app tests
 docker compose config --quiet
 ```
 
-Current verified result:
+Latest verified result:
 
 ```text
-pytest: 6 passed
+pytest: 266 passed
 Ruff: all checks passed
 mypy: no issues found
 Docker Compose: backend healthy, PostgreSQL healthy
 ```
 
-The FastAPI test client currently emits a non-blocking upstream deprecation warning about `httpx`. It does not change the six passing test results.
+The FastAPI test client currently emits a non-blocking upstream deprecation warning about `httpx`. It does not affect the verification result.
 
-## Current API
+## API contract
 
 ### `POST /api/v1/auth/token`
 
-Exchanges a normalized email/password credential for a short-lived signed bearer token. Unknown email and wrong password return the same HTTP `401` response; a valid user without tenant membership receives HTTP `403`.
+Issues a short-lived signed bearer token for a seeded user with an active tenant membership. Email normalization is server-side. Unknown email and wrong password both return `401`; a valid user without membership returns `403`. The endpoint is independently rate-limited per source IP.
+
+Account provisioning is intentionally outside this capstone's public API. The seed command creates the deterministic demo tenant, user, and membership; production registration, email verification, password recovery, and tenant onboarding are outside the documented scope.
 
 ```json
 {
@@ -436,7 +438,7 @@ Reproducible command output and pending acceptance criteria are tracked in [`EVI
 |   |-- core/             # typed configuration and database infrastructure
 |   `-- services/         # application health decisions
 |-- tests/api/            # API and failure-path tests
-|-- docs/DESIGN.md        # planned architecture and contracts
+|-- docs/DESIGN.md        # architecture, contracts, and non-goals
 |-- alembic.ini           # migration runner configuration
 |-- app/alembic/          # versioned product schema
 |-- Dockerfile
@@ -450,13 +452,12 @@ Reproducible command output and pending acceptance criteria are tracked in [`EVI
 
 ## Remaining work
 
-The required capstone core is complete. What is left is deployment and scale work, ordered by what a real operator would need first:
+The required capstone core is complete. What remains is optional deployment and operational hardening, ordered by what a real operator would need first:
 
-1. Move rate-limit and metrics state into Redis so horizontal scaling is correct.
-2. Expose metrics in OpenMetrics text format and add alert rules on the RED signals.
-3. Supervise the outbox worker as a Compose service with exponential backoff and dead-letter replay.
-4. Re-measure the composite widget index on realistic row counts.
-5. CI running the same three gates that run locally, then a deployed environment with TLS and backups.
+1. Add a Prometheus scrape configuration, recording rules, alert rules, and a Grafana dashboard.
+2. Add exponential backoff and automatic dead-letter replay for webhook delivery.
+3. Separate migration execution from application startup for multi-replica deployments.
+4. Add CI running the same gates that run locally, then a deployed environment with TLS and backups.
 
 Stretch features remain out of scope until the required acceptance probes pass.
 
@@ -521,7 +522,7 @@ placeholders. Cloud deployment, TLS termination, backups, log shipping, and CI a
 
 ## Public project documents
 
-- [`docs/DESIGN.md`](docs/DESIGN.md): planned architecture and contracts.
+- [`docs/DESIGN.md`](docs/DESIGN.md): architecture, contracts, implementation status, and non-goals.
 - [`EVIDENCE.md`](EVIDENCE.md): implemented proofs and pending acceptance criteria.
-- [`BUILDLOG.md`](BUILDLOG.md): development decisions, AI assistance, mistakes, and corrections.
+- [`BUILDLOG.md`](BUILDLOG.md): development decisions, tool usage, mistakes, and corrections.
 - [`capstone.yaml`](capstone.yaml): evaluator command and endpoint manifest.

@@ -1,4 +1,4 @@
-run: "docker compose up --build"
+run: "docker compose up --build --wait"
 seed: "docker compose exec backend python -m app.seed"
 test: "uv run pytest"
 base_url: "http://localhost:8000"
@@ -14,5 +14,5 @@ endpoints:
   submissions: "/api/v1/public/widgets/{widget_id}/submissions"
   dashboard: "/api/v1/dashboard/submissions"
 demo_page: "demo/index.html"
-worker: "docker compose exec backend python -m app.worker --once"
+worker: "docker compose exec worker python -m app.worker --once"
 status: "core-complete"
