@@ -315,7 +315,7 @@ Demo rehearsal: 60/60 assertions passed across 21 steps
 Harness: HARNESS VERIFIED
 ```
 
-The detailed command transcripts are in [`EVIDENCE.md`](EVIDENCE.md). The rationale for non-obvious decisions is in [`docs/decisions.md`](docs/decisions.md); the engineering history is in [`BUILDLOG.md`](BUILDLOG.md).
+The detailed command transcripts are in [`EVIDENCE.md`](EVIDENCE.md). Engineering decisions, corrections, and tool usage are recorded in [`BUILDLOG.md`](BUILDLOG.md).
 
 ## Project documents
 
