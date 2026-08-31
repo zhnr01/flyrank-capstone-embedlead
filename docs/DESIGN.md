@@ -1,6 +1,6 @@
 # Design — EmbedLead Widget Platform
 
-Status: draft for Phase 1 review. This document is the contract we will implement, not a description written after implementation.
+Status: implemented core contract. This document records the shipped architecture, contracts, non-goals, and remaining operational hardening.
 
 ## 1. Problem
 
@@ -34,9 +34,9 @@ A client never chooses the authoritative tenant ID. It is derived from authentic
 ### 3.2 Public delivery
 
 ```text
-<script src="/widget.v1.js?id=PUBLIC_ID">
+<script src="/api/v1/public/widgets/bundle/v2/widget.js">
   -> long-lived immutable JavaScript asset
-  -> GET public widget config by opaque public ID
+  -> GET public widget config by widget ID
   -> short-lived cacheable JSON
   -> render with DOM APIs
 ```
@@ -62,14 +62,14 @@ OPTIONS preflight (when browser requires it)
 
 ### Tenant
 
-- `id UUID PRIMARY KEY`
+- `id INTEGER PRIMARY KEY`
 - `name VARCHAR(120) NOT NULL`
 - `created_at TIMESTAMPTZ NOT NULL`
 
 ### Membership
 
-- `tenant_id UUID NOT NULL REFERENCES tenant(id)`
-- `user_id UUID NOT NULL REFERENCES user(id)`
+- `tenant_id INTEGER NOT NULL REFERENCES tenant(id)`
+- `user_id INTEGER NOT NULL REFERENCES user(id)`
 - `role VARCHAR(30) NOT NULL`
 - primary key `(tenant_id, user_id)`
 
@@ -77,9 +77,8 @@ The membership connects identity to tenant authority. A global `user.tenant_id` 
 
 ### Widget
 
-- `id UUID PRIMARY KEY` — internal identity
-- `public_id UUID UNIQUE NOT NULL` — safe public lookup identifier
-- `tenant_id UUID NOT NULL REFERENCES tenant(id)`
+- `id INTEGER PRIMARY KEY` — internal identity
+- `tenant_id INTEGER NOT NULL REFERENCES tenant(id)`
 - `name VARCHAR(120) NOT NULL`
 - `kind VARCHAR(30) NOT NULL`
 - `title VARCHAR(160) NOT NULL`
@@ -97,9 +96,9 @@ Indexes/constraints:
 
 ### Submission
 
-- `id UUID PRIMARY KEY`
-- `widget_id UUID NOT NULL REFERENCES widget(id)`
-- `tenant_id UUID NOT NULL REFERENCES tenant(id)` — deliberately duplicated for direct tenant-scoped analytics and defence in depth
+- `id INTEGER PRIMARY KEY`
+- `widget_id INTEGER NOT NULL REFERENCES widget(id)`
+- `tenant_id INTEGER NOT NULL REFERENCES tenant(id)` — deliberately duplicated for direct tenant-scoped analytics and defence in depth
 - `payload JSONB NOT NULL`
 - `country_code VARCHAR(2)`
 - `city VARCHAR(120)`
@@ -142,10 +141,10 @@ Prefix: `/api/v1`.
 
 | Method/path | Success | Purpose |
 |---|---:|---|
-| `GET /public/widgets/{public_id}/config` | 200 | Publish minimal cacheable config |
-| `POST /public/widgets/{public_id}/submissions` | 202 | Accept a valid submission |
-| `OPTIONS /public/widgets/{public_id}/submissions` | 200/204 | Browser preflight handled by CORS middleware |
-| `GET /assets/widget.v1.js` | 200 | Immutable versioned loader/bundle |
+| `GET /public/widgets/{widget_id}/config` | 200 | Publish minimal cacheable config |
+| `POST /public/widgets/{widget_id}/submissions` | 202 | Accept a valid submission |
+| `OPTIONS /public/widgets/{widget_id}/submissions` | 200/204 | Browser preflight handled by CORS middleware |
+| `GET /public/widgets/bundle/v2/widget.js` | 200 | Immutable versioned loader/bundle |
 
 `202 Accepted` means the lead is durably stored and the non-critical notification is pending; it does not claim the email/webhook was delivered.
 
@@ -188,11 +187,11 @@ Stable mappings:
 ## 7. Failure semantics
 
 - PostgreSQL unavailable: submission fails safely; never claim acceptance without durable storage.
-- Redis limiter unavailable: local development may fail open; production must make the policy explicit. Core design preference is fail closed for the hostile public submission endpoint once production mode is used.
+- Redis limiter unavailable: the shipped policy fails open to a bounded in-process limiter, preserving lead capture while making the per-process scope explicit.
 - Geo A unavailable/invalid/slow: attempt B.
 - Geo A and B unavailable: store without geo and return acceptance.
 - Broker unavailable after commit: outbox remains pending and a dispatcher retries.
-- Notification provider unavailable: worker retries with bounded exponential backoff and records terminal failure.
+- Notification provider unavailable: worker retries with a fixed bounded attempt budget and records terminal failure.
 
 ## 8. Architecture boundaries
 
@@ -208,11 +207,11 @@ Infrastructure adapters
   own Redis, geo HTTP clients, notification provider, and queue details
 ```
 
-We will not create an interface for every class. A boundary earns an abstraction when tests need a deterministic external dependency or when multiple implementations exist (geo A/B is a real example).
+The implementation does not create an interface for every class. A boundary earns an abstraction when tests need a deterministic external dependency or when multiple implementations exist (geo A/B is a real example).
 
 ## 9. Definition-of-Done mapping
 
-The implementation order is vertical rather than layer-by-layer:
+The implementation was delivered vertically rather than layer-by-layer:
 
 1. Health/startup tracer — Compose, app, Postgres migration, stable errors.
 2. Tenant/widget tracer — authenticate, create, read, and prove cross-tenant denial.
