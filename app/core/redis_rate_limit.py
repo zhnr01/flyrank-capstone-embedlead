@@ -27,7 +27,7 @@ REDIS_FAILURES = (
 
 
 class RateLimiterProtocol(Protocol):
-    def check(self, key: str) -> RateLimitDecision: ...
+    def acquire(self, key: str) -> RateLimitDecision: ...
 
     def reset(self) -> None: ...
 
@@ -72,7 +72,7 @@ class RedisRateLimiter:
         )
         self._strategy = MovingWindowRateLimiter(storage)
 
-    def check(self, key: str) -> RateLimitDecision:
+    def acquire(self, key: str) -> RateLimitDecision:
         if self._strategy.hit(self._item, key):
             return RateLimitDecision(allowed=True, retry_after_seconds=0)
         stats = self._strategy.get_window_stats(self._item, key)
@@ -101,15 +101,15 @@ class ResilientRateLimiter:
         self._primary = primary
         self._fallback = fallback
 
-    def check(self, key: str) -> RateLimitDecision:
+    def acquire(self, key: str) -> RateLimitDecision:
         try:
-            return self._primary.check(key)
+            return self._primary.acquire(key)
         except REDIS_FAILURES:
             logger.warning(
                 "rate_limit_store_unavailable",
                 extra={"fields": {"fallback": "in_process"}},
             )
-            return self._fallback.check(key)
+            return self._fallback.acquire(key)
 
     def reset(self) -> None:
         try:

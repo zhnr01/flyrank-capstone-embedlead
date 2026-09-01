@@ -33,15 +33,22 @@ class Widget:
 
 
 @dataclass(frozen=True)
-class WidgetOwnership:
-    id: int
+class OwnedWidget:
+    widget: Widget
     tenant_id: int
 
 
 @dataclass(frozen=True)
 class WidgetPage:
-    data: list[Widget]
+    widgets: list[Widget]
     next_after_id: int | None
+
+
+@dataclass(frozen=True)
+class WidgetChanges:
+    name: str | None
+    kind: WidgetKind | None
+    config: WidgetConfig | None
 
 
 def config_from_stored(stored: object) -> WidgetConfig:
@@ -83,14 +90,16 @@ class WidgetRepository(Protocol):
         *,
         identity: Identity,
         widget_id: int,
-        name: str | None,
-        kind: WidgetKind | None,
-        config: WidgetConfig | None,
+        changes: WidgetChanges,
     ) -> Widget | None: ...
 
     def delete_for_tenant(self, *, identity: Identity, widget_id: int) -> bool: ...
 
-    def get_ownership(self, *, widget_id: int) -> WidgetOwnership | None: ...
+    def get_public_with_ownership(
+        self,
+        *,
+        widget_id: int,
+    ) -> OwnedWidget | None: ...
 
     def get_public(self, *, widget_id: int) -> Widget | None: ...
 
@@ -148,7 +157,7 @@ class SqlAlchemyWidgetRepository:
         visible = records[:limit]
         next_after_id = visible[-1].id if has_next_page and visible else None
         return WidgetPage(
-            data=[self._to_widget(record) for record in visible],
+            widgets=[self._to_widget(record) for record in visible],
             next_after_id=next_after_id,
         )
 
@@ -157,19 +166,17 @@ class SqlAlchemyWidgetRepository:
         *,
         identity: Identity,
         widget_id: int,
-        name: str | None,
-        kind: WidgetKind | None,
-        config: WidgetConfig | None,
+        changes: WidgetChanges,
     ) -> Widget | None:
         record = self._get_record(identity=identity, widget_id=widget_id)
         if record is None:
             return None
-        if name is not None:
-            record.name = name
-        if kind is not None:
-            record.kind = kind
-        if config is not None:
-            record.config = config.model_dump(mode="json")
+        if changes.name is not None:
+            record.name = changes.name
+        if changes.kind is not None:
+            record.kind = changes.kind
+        if changes.config is not None:
+            record.config = changes.config.model_dump(mode="json")
         self._session.commit()
         self._session.refresh(record)
         return self._to_widget(record)
@@ -195,33 +202,26 @@ class SqlAlchemyWidgetRepository:
             )
         )
 
-    def get_ownership(self, *, widget_id: int) -> WidgetOwnership | None:
-        row = self._session.execute(
-            select(WidgetRecord.id, WidgetRecord.tenant_id).where(
-                WidgetRecord.id == widget_id
-            )
-        ).one_or_none()
-        if row is None:
+    def get_public_with_ownership(
+        self,
+        *,
+        widget_id: int,
+    ) -> OwnedWidget | None:
+        record = self._session.scalar(
+            select(WidgetRecord).where(WidgetRecord.id == widget_id)
+        )
+        if record is None:
             return None
-        return WidgetOwnership(id=row.id, tenant_id=row.tenant_id)
+        return OwnedWidget(
+            widget=self._to_widget(record),
+            tenant_id=record.tenant_id,
+        )
 
     def get_public(self, *, widget_id: int) -> Widget | None:
-        row = self._session.execute(
-            select(
-                WidgetRecord.id,
-                WidgetRecord.name,
-                WidgetRecord.kind,
-                WidgetRecord.config,
-            ).where(WidgetRecord.id == widget_id)
-        ).one_or_none()
-        if row is None:
-            return None
-        return Widget(
-            id=row.id,
-            name=row.name,
-            kind=kind_or_default(row.kind),
-            config=config_from_stored(row.config),
+        record = self._session.scalar(
+            select(WidgetRecord).where(WidgetRecord.id == widget_id)
         )
+        return self._to_widget(record) if record is not None else None
 
     @staticmethod
     def _to_widget(record: WidgetRecord) -> Widget:
@@ -280,16 +280,14 @@ class InMemoryWidgetRepository:
         has_next_page = len(widgets) > limit
         visible = widgets[:limit]
         next_after_id = visible[-1].id if has_next_page and visible else None
-        return WidgetPage(data=visible, next_after_id=next_after_id)
+        return WidgetPage(widgets=visible, next_after_id=next_after_id)
 
     def update_for_tenant(
         self,
         *,
         identity: Identity,
         widget_id: int,
-        name: str | None,
-        kind: WidgetKind | None,
-        config: WidgetConfig | None,
+        changes: WidgetChanges,
     ) -> Widget | None:
         key = (identity.tenant_id, widget_id)
         widget = self._widgets.get(key)
@@ -297,11 +295,11 @@ class InMemoryWidgetRepository:
             return None
         updated = replace(
             widget,
-            name=name if name is not None else widget.name,
-            kind=kind if kind is not None else widget.kind,
+            name=changes.name if changes.name is not None else widget.name,
+            kind=changes.kind if changes.kind is not None else widget.kind,
             config=(
-                config_from_stored(config.model_dump(mode="json"))
-                if config is not None
+                config_from_stored(changes.config.model_dump(mode="json"))
+                if changes.config is not None
                 else widget.config
             ),
         )
@@ -311,10 +309,14 @@ class InMemoryWidgetRepository:
     def delete_for_tenant(self, *, identity: Identity, widget_id: int) -> bool:
         return self._widgets.pop((identity.tenant_id, widget_id), None) is not None
 
-    def get_ownership(self, *, widget_id: int) -> WidgetOwnership | None:
-        for (tenant_id, stored_id) in self._widgets:
+    def get_public_with_ownership(
+        self,
+        *,
+        widget_id: int,
+    ) -> OwnedWidget | None:
+        for (tenant_id, stored_id), widget in self._widgets.items():
             if stored_id == widget_id:
-                return WidgetOwnership(id=widget_id, tenant_id=tenant_id)
+                return OwnedWidget(widget=widget, tenant_id=tenant_id)
         return None
 
     def get_public(self, *, widget_id: int) -> Widget | None:

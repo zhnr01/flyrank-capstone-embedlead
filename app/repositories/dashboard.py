@@ -214,13 +214,15 @@ class InMemoryDashboardRepository:
             by_country=[
                 CountryCount(country=country, count=count)
                 for country, count in sorted(
-                    countries.items(), key=lambda item: (-item[1], item[0])
+                    countries.items(),
+                    key=lambda country_total: (-country_total[1], country_total[0]),
                 )
             ],
             by_widget=[
                 WidgetCount(widget_id=widget, count=count)
                 for widget, count in sorted(
-                    widgets.items(), key=lambda item: (-item[1], item[0])
+                    widgets.items(),
+                    key=lambda widget_total: (-widget_total[1], widget_total[0]),
                 )
             ],
         )

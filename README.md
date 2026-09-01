@@ -239,7 +239,7 @@ Metrics expose request counters, latency histograms, and named event counters. T
 - Login and public submissions have separate per-IP budgets.
 - Redis-backed limiter state is shared across backend replicas when configured.
 - Redis failure degrades to a bounded local limiter; leads are not rejected solely because the optional limiter store is unavailable.
-- PostgreSQL is the durable source of truth; Redis holds disposable limiter/task state only.
+- PostgreSQL is the durable source of truth and outbox queue; Redis holds disposable rate-limit state only.
 - A submission and its notification intent commit in one database transaction.
 - Notification delivery is outside the request path and cannot roll back a stored lead.
 - Webhook delivery is at-least-once and keyed by an idempotency key.
@@ -306,7 +306,7 @@ docs/DESIGN.md                architecture contract and explicit non-goals
 Latest repository gates:
 
 ```text
-pytest: 266 passed
+pytest: 267 passed
 Ruff: all checks passed
 mypy: no issues found in 101 source files
 Definition-of-Done live sweep: 26/26 checks passed

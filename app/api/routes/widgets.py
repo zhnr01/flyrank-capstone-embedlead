@@ -15,7 +15,7 @@ from app.api.widget_dependencies import get_widget_repository
 from app.core.config import settings
 from app.core.identity import Identity
 from app.core.widget_config import default_config
-from app.repositories.widgets import WidgetRepository
+from app.repositories.widgets import WidgetChanges, WidgetRepository
 
 router = APIRouter(prefix="/widgets", tags=["widgets"])
 IdentityDep = Annotated[Identity, Depends(get_current_identity)]
@@ -50,7 +50,7 @@ def list_widgets(
         after_id=after_id,
     )
     return WidgetListResponse(
-        data=[WidgetResponse.model_validate(widget) for widget in page.data],
+        data=[WidgetResponse.model_validate(widget) for widget in page.widgets],
         next_after_id=page.next_after_id,
     )
 
@@ -88,9 +88,11 @@ def update_widget(
     widget = repository.update_for_tenant(
         identity=identity,
         widget_id=widget_id,
-        name=payload.name if "name" in payload.model_fields_set else None,
-        kind=payload.kind if "kind" in payload.model_fields_set else None,
-        config=payload.config if "config" in payload.model_fields_set else None,
+        changes=WidgetChanges(
+            name=payload.name,
+            kind=payload.kind,
+            config=payload.config,
+        ),
     )
     if widget is None:
         raise HTTPException(

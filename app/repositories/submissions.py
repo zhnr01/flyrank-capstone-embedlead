@@ -22,45 +22,37 @@ class Submission:
     answers: dict[str, str | None] | None = None
 
 
+@dataclass(frozen=True)
+class NewSubmission:
+    widget_id: int
+    tenant_id: int
+    email: str
+    name: str
+    message: str | None
+    location: GeoLocation | None = None
+    answers: dict[str, str | None] | None = None
+
+
 class SubmissionRepository(Protocol):
-    def create(
-        self,
-        *,
-        widget_id: int,
-        tenant_id: int,
-        email: str,
-        name: str,
-        message: str | None,
-        location: GeoLocation | None = None,
-        answers: dict[str, str | None] | None = None,
-    ) -> Submission: ...
+    def create(self, new_submission: NewSubmission) -> Submission: ...
 
 
 class SqlAlchemySubmissionRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def create(
-        self,
-        *,
-        widget_id: int,
-        tenant_id: int,
-        email: str,
-        name: str,
-        message: str | None,
-        location: GeoLocation | None = None,
-        answers: dict[str, str | None] | None = None,
-    ) -> Submission:
+    def create(self, new_submission: NewSubmission) -> Submission:
+        location = new_submission.location
         record = SubmissionRecord(
-            widget_id=widget_id,
-            tenant_id=tenant_id,
-            email=email,
-            name=name,
-            message=message,
+            widget_id=new_submission.widget_id,
+            tenant_id=new_submission.tenant_id,
+            email=new_submission.email,
+            name=new_submission.name,
+            message=new_submission.message,
             geo_country=location.country if location else None,
             geo_city=location.city if location else None,
             geo_provider=location.provider if location else None,
-            answers=answers,
+            answers=new_submission.answers,
         )
         self._session.add(record)
         self._session.flush()
@@ -75,6 +67,7 @@ class SqlAlchemySubmissionRepository:
             geo_country=record.geo_country,
             geo_city=record.geo_city,
             geo_provider=record.geo_provider,
+            answers=(dict(record.answers) if record.answers is not None else None),
         )
 
 
@@ -83,28 +76,19 @@ class InMemorySubmissionRepository:
         self._submissions: list[Submission] = []
         self._ids = count(1)
 
-    def create(
-        self,
-        *,
-        widget_id: int,
-        tenant_id: int,
-        email: str,
-        name: str,
-        message: str | None,
-        location: GeoLocation | None = None,
-        answers: dict[str, str | None] | None = None,
-    ) -> Submission:
+    def create(self, new_submission: NewSubmission) -> Submission:
+        location = new_submission.location
         submission = Submission(
             id=next(self._ids),
-            widget_id=widget_id,
-            tenant_id=tenant_id,
-            email=email,
-            name=name,
-            message=message,
+            widget_id=new_submission.widget_id,
+            tenant_id=new_submission.tenant_id,
+            email=new_submission.email,
+            name=new_submission.name,
+            message=new_submission.message,
             geo_country=location.country if location else None,
             geo_city=location.city if location else None,
             geo_provider=location.provider if location else None,
-            answers=answers,
+            answers=new_submission.answers,
         )
         self._submissions.append(submission)
         return submission

@@ -36,7 +36,7 @@ class RateLimiter:
     def tracked_keys(self) -> int:
         return len(self._hits)
 
-    def check(self, key: str) -> RateLimitDecision:
+    def acquire(self, key: str) -> RateLimitDecision:
         now = self._clock()
         self._discard_expired(now)
 

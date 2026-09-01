@@ -90,7 +90,7 @@ The identity registry is no longer a test seam. Signed token creation and verifi
 - [x] Tenant A cannot read tenant B resources
 - [x] Real user login, signed tokens, and persistent memberships — see "Authentication foundation" above
 - [x] Widget update/delete/list — see "Widget resource lifecycle" above
-- [ ] Embed snippet generated per widget — PENDING
+- [x] Embed snippet generated per widget — implemented by `GET /api/v1/widgets/{widget_id}/embed`; current live proof appears in the Unit 4 rehearsal below.
 
 ## Widget delivery
 
@@ -99,6 +99,9 @@ The identity registry is no longer a test seam. Signed token creation and verifi
 - [x] Widget renders from a second origin
 
 ### Widget delivery runtime proof
+
+Historical v1 transcript, superseded by the v2 bundle. The current contract serves
+`/bundle/v2/widget.js` and returns `404` for v1; current proof appears in the Unit 4 rehearsal.
 
 ```text
 GET /api/v1/public/widgets/1/config
@@ -161,7 +164,8 @@ SELECT s.id, s.widget_id, s.tenant_id, w.tenant_id AS widget_tenant, (s.tenant_i
 
 Honest note: a POST from a disallowed origin still returns 202 and stores the row, with no allow-origin header. That is correct CORS semantics — the browser discards the response, but a non-browser client such as `curl` is unaffected. CORS is a browser policy, not authorization. Abuse protection for non-browser callers is the rate-limit and spam-control slice, not this one.
 
-Known limitation: the size guard reads the declared `Content-Length`. A streaming client that omits the header bypasses it. A middleware-level streaming cap is required to close this.
+Historical defect, now fixed: `BodySizeLimitMiddleware` bounds streamed ASGI body bytes independently
+of `Content-Length`; the Unit 0 regression proof below covers chunked and undeclared bodies.
 
 ## Abuse protection
 
@@ -194,10 +198,10 @@ Legitimate traffic during a block is proven by `test_blocked_ip_does_not_block_a
 
 Both responses to the honeypot are byte-identical, which is the point: an automated caller gets no signal to adapt to. The drop is therefore made visible to operators through a warning log line rather than a response difference.
 
-Known limitations, not yet closed:
+Historical limitations at the time of this transcript:
 
-- Limiter state is in-process. With N workers the effective limit becomes N x limit; a shared store such as Redis is required to scale beyond one container.
-- A restart clears the state and forgives current offenders. Demonstrated during this proof: `docker compose restart backend` immediately allowed a previously blocked address.
+- Limiter state was in-process. This is resolved: Redis now provides the shared primary budget, with a bounded per-process fallback only during Redis degradation.
+- A restart cleared process-local state. This now applies only to the in-process degradation fallback; Redis-backed state survives backend restarts.
 - The client address is the socket peer. Behind a reverse proxy this requires `--proxy-headers` plus an explicit trusted-proxy list before any forwarding header may be believed.
 - A honeypot stops naive bots only; a targeted attacker reads the rendered form and omits the field.
 
@@ -291,13 +295,13 @@ secret leaked into body or headers: False
 The shared secret signs the idempotency key with HMAC-SHA256 and is never transmitted, so a
 receiver can verify authenticity without the secret ever appearing in a payload or a log line.
 
-Remaining limitations for this area:
+Historical limitations for this area:
 
 - Dead-letter rows emit an ERROR-level alert through the `FailureAlerter` seam, proven at runtime:
   `ALERT outbox dead letter topic=submission.created key=alerttest:1 attempts=2 error=ConnectionError: smtp refused connection`.
   The alert is emitted exactly once, at exhaustion, and never on success. Routing it to email,
   PagerDuty, or Sentry is a new class implementing the same protocol; there is no automatic replay.
-- The worker runs as a separate manual process rather than a supervised Compose service.
+- The worker was manual at the time of this proof. This is resolved: Compose now supervises a dedicated worker service.
 - No SMTP transport; the webhook plus logging transports are the implemented options.
 
 ### Geo enrichment runtime proof

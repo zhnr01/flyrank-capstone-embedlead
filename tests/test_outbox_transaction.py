@@ -23,6 +23,7 @@ from app.repositories.outbox import (
 )
 from app.repositories.submissions import (
     InMemorySubmissionRepository,
+    NewSubmission,
     SqlAlchemySubmissionRepository,
 )
 
@@ -61,11 +62,13 @@ def session() -> Generator[Session]:
 def store_lead(session: Session, email: str) -> int:
     submissions = SqlAlchemySubmissionRepository(session)
     submission = submissions.create(
-        widget_id=1,
-        tenant_id=TENANT_ID,
-        email=email,
-        name="Visitor",
-        message="hello",
+        NewSubmission(
+            widget_id=1,
+            tenant_id=TENANT_ID,
+            email=email,
+            name="Visitor",
+            message="hello",
+        )
     )
     return submission.id
 
@@ -137,6 +140,22 @@ def test_duplicate_key_leaves_exactly_one_outbox_row(session: Session) -> None:
     assert stored_emails(session) == ["once@example.com"]
 
 
+def test_submission_implementations_return_the_same_answers(session: Session) -> None:
+    new_submission = NewSubmission(
+        widget_id=1,
+        tenant_id=TENANT_ID,
+        email="answers@example.com",
+        name="Visitor",
+        message="hello",
+        answers={"email": "answers@example.com", "name": "Visitor"},
+    )
+
+    sql_submission = SqlAlchemySubmissionRepository(session).create(new_submission)
+    memory_submission = InMemorySubmissionRepository().create(new_submission)
+
+    assert sql_submission.answers == memory_submission.answers
+
+
 def test_session_stays_usable_after_a_duplicate(session: Session) -> None:
     outbox = SqlAlchemyOutboxRepository(session)
     first_id = store_lead(session, "first@example.com")
@@ -176,11 +195,13 @@ def test_both_implementations_agree_on_duplicate_enqueue(session: Session) -> No
 
     sql_id = store_lead(session, "agree@example.com")
     memory_submissions.create(
-        widget_id=1,
-        tenant_id=TENANT_ID,
-        email="agree@example.com",
-        name="Visitor",
-        message="hello",
+        NewSubmission(
+            widget_id=1,
+            tenant_id=TENANT_ID,
+            email="agree@example.com",
+            name="Visitor",
+            message="hello",
+        )
     )
     key = submission_created_key(sql_id)
 

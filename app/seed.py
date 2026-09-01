@@ -21,56 +21,66 @@ DEMO_WIDGETS = [
 ]
 
 
-def seed() -> None:
-    with Session(engine) as session:
-        for tenant_id, name in DEMO_TENANTS:
-            if session.get(TenantRecord, tenant_id) is None:
-                session.add(TenantRecord(id=tenant_id, name=name))
-        session.flush()
+def seed_tenants(session: Session) -> None:
+    for tenant_id, name in DEMO_TENANTS:
+        if session.get(TenantRecord, tenant_id) is None:
+            session.add(TenantRecord(id=tenant_id, name=name))
+    session.flush()
 
-        for user_id, email, tenant_id in DEMO_USERS:
-            existing = session.execute(
-                select(UserRecord).where(UserRecord.email == email)
-            ).scalar_one_or_none()
-            if existing is None:
-                session.add(
-                    UserRecord(
-                        id=user_id,
-                        email=email,
-                        password_hash=get_password_hash(DEMO_PASSWORD),
-                    )
-                )
-            membership = session.get(MembershipRecord, (user_id, tenant_id))
-            if membership is None:
-                session.add(
-                    MembershipRecord(
-                        user_id=user_id,
-                        tenant_id=tenant_id,
-                        role="owner",
-                    )
-                )
-        session.flush()
 
-        for widget_id, tenant_id, name, kind in DEMO_WIDGETS:
-            if session.get(WidgetRecord, widget_id) is None:
-                session.add(
-                    WidgetRecord(
-                        id=widget_id,
-                        tenant_id=tenant_id,
-                        name=name,
-                        kind=kind,
-                        config=default_config().model_dump(mode="json"),
-                    )
-                )
-        session.commit()
-
-        for table in ("tenants", "users", "widgets"):
-            session.execute(
-                text(
-                    f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), "
-                    f"GREATEST((SELECT COALESCE(MAX(id), 1) FROM {table}), 1))"
+def seed_users_and_memberships(session: Session) -> None:
+    for user_id, email, tenant_id in DEMO_USERS:
+        existing = session.scalar(select(UserRecord).where(UserRecord.email == email))
+        if existing is None:
+            session.add(
+                UserRecord(
+                    id=user_id,
+                    email=email,
+                    password_hash=get_password_hash(DEMO_PASSWORD),
                 )
             )
+        if session.get(MembershipRecord, (user_id, tenant_id)) is None:
+            session.add(
+                MembershipRecord(
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    role="owner",
+                )
+            )
+    session.flush()
+
+
+def seed_widgets(session: Session) -> None:
+    for widget_id, tenant_id, name, kind in DEMO_WIDGETS:
+        if session.get(WidgetRecord, widget_id) is None:
+            session.add(
+                WidgetRecord(
+                    id=widget_id,
+                    tenant_id=tenant_id,
+                    name=name,
+                    kind=kind,
+                    config=default_config().model_dump(mode="json"),
+                )
+            )
+
+
+def reset_identity_sequences(session: Session) -> None:
+    for table in ("tenants", "users", "widgets"):
+        session.execute(
+            text(
+                f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), "
+                f"GREATEST((SELECT COALESCE(MAX(id), 1) FROM {table}), 1))"
+            )
+        )
+
+
+def seed() -> None:
+    with Session(engine) as session:
+        seed_tenants(session)
+        seed_users_and_memberships(session)
+        seed_widgets(session)
+        session.commit()
+        reset_identity_sequences(session)
         session.commit()
 
     logger.info(

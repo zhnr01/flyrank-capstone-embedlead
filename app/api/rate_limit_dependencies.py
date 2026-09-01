@@ -88,7 +88,7 @@ def enforce_submission_rate_limits(request: Request, widget_id: int) -> None:
         (_ip_limiter, IP_SCOPE, f"{IP_SCOPE}:{address}"),
         (_widget_limiter, WIDGET_SCOPE, f"{WIDGET_SCOPE}:{widget_id}"),
     ):
-        decision = limiter.check(key)
+        decision = limiter.acquire(key)
         if not decision.allowed:
             increment("submission_rate_limited", scope)
             logger.warning(
@@ -109,7 +109,7 @@ def enforce_submission_rate_limits(request: Request, widget_id: int) -> None:
 
 def enforce_login_rate_limit(request: Request) -> None:
     address = client_address(request)
-    decision = _login_limiter.check(f"{LOGIN_SCOPE}:{address}")
+    decision = _login_limiter.acquire(f"{LOGIN_SCOPE}:{address}")
     if decision.allowed:
         return
     increment("login_rate_limited", LOGIN_SCOPE)

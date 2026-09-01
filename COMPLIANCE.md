@@ -78,7 +78,7 @@ Status values:
 
 | Box | Status | Note |
 |---|---|---|
-| Tests cover CORS preflight, invalid payload, oversized payload, rate limiting, spam control, provider fallback, widget rendering | DONE | All seven cases covered across 135 tests; the rendering case is proven by the second-origin browser transcript in `EVIDENCE.md`. |
+| Tests cover CORS preflight, invalid payload, oversized payload, rate limiting, spam control, provider fallback, widget rendering | DONE | All seven cases are covered in the current 267-test suite; the rendering case also has second-origin runtime evidence in `EVIDENCE.md`. |
 | README with architecture diagram, setup, API docs | DONE | Diagram, run steps, seed step, per-endpoint docs, and an honest limitations section. |
 | Five submission-pack files present | DONE | `README.md`, `capstone.yaml`, `EVIDENCE.md`, `BUILDLOG.md`, `.env.example`, plus `LICENSE`. |
 
@@ -100,11 +100,11 @@ Status values:
 | 1 | Layered architecture (data / logic / HTTP separated) | DONE | Routes, repositories, core, models are distinct; core auth holds no HTTP or storage wiring. |
 | 2 | Validation at the boundary → clean 4xx, never 500 | DONE | Owner and public paths both return 4xx JSON for malformed, oversized, unknown-field, and unknown-resource cases. |
 | 3 | ≥1 background job, off the request path, retries + failure alert | DONE | Transactional outbox plus `python -m app.worker`; bounded attempts, dead-letter status with `last_error` recorded. |
-| 4 | Real persistence: migrations, right indexes, isolated tenants | DONE | Six Alembic migrations; composite indexes; tenant predicates in SQL. |
+| 4 | Real persistence: migrations, right indexes, isolated tenants | DONE | Nine Alembic migrations; composite indexes; tenant predicates in SQL. |
 | 5 | Idempotency where it matters — retried action happens once | DONE | Derived idempotency key with a database unique constraint; duplicate enqueue is a no-op, proven at runtime. |
 | 6 | Secrets clean — env only, never logged | DONE | `.env` ignored, `.env.example` placeholders, production rejects the development key. Webhook secret signs via HMAC and is never transmitted or logged, asserted by test. |
-| 7 | Cost tracked if AI is used | N/A | No AI feature in this system. |
-| 8 | Tests that matter — the scary cases, deterministic | DONE | 212 tests: auth, tenant isolation, CORS, oversized, abuse with an injected clock, provider failure, real webhook failure, caching/304, dashboard scoping, metrics auth and cardinality bounds. Determinism verified by repeated full-suite runs, not assumed. |
+| 7 | Cost tracked if AI is used | N/A | No AI-powered runtime feature or model/API usage; development tool usage is disclosed in `BUILDLOG.md`. |
+| 8 | Tests that matter — the scary cases, deterministic | DONE | 267 tests cover auth, tenant isolation, CORS, body limits, abuse controls, dependency failure, webhook delivery, caching, dashboard scoping, Redis fallback, and Prometheus cardinality. |
 
 ## Observability (shared requirement: operators can see it working)
 
@@ -134,15 +134,15 @@ Status values:
 | `X-Request-ID` was echoed after only a length check | Header and log injection via a caller-controlled value | Fixed — non-alphanumeric or long values replaced with a fresh UUID |
 | README `Limitations` still claimed no widget, submission, auth, tenant, worker, or dashboard implementation existed | Directly contradicted the feature list in the same file | Fixed — rewritten to state the real operational limits |
 | Composite widget index exists but plan shows a sequential scan at six rows | Index usage unproven | Open — re-measure on realistic data |
-| Rate-limit counters and the metrics registry are in-process | Incorrect under horizontal scaling: limit becomes N x limit, metrics are per-instance | Open and documented — Redis required before multi-container |
+| Rate-limit counters were in-process | Incorrect under horizontal scaling: limit became N x limit | Fixed — Redis primary with bounded in-process degradation fallback |
 | `test_tampered_access_token_is_rejected` flipped a token's last base64url character | Flaky ~1 run in 16: a 43-char signature has 2 bits of encoding slack, so `Y`→`a` decodes byte-identically and the token was never actually tampered with | Fixed — tampering now mutates the payload (forged `sub`), plus new wrong-key and `alg: none` cases; determinism proven by 20 auth runs and 5 full-suite runs |
 
-## Remaining build order
+## Remaining operational hardening
 
-The required core is complete and proven. Remaining items are scale and deployment work:
+The required core and shared-state work are complete. Remaining items are deployment operations:
 
-1. Shared state (Redis) for rate limiting and metrics so horizontal scaling is correct.
-2. OpenMetrics exposition plus alert rules on the RED signals.
-3. Supervised outbox worker with exponential backoff and dead-letter replay.
+1. Add Prometheus scrape configuration, recording rules, alert rules, and dashboards.
+2. Add exponential backoff and automatic dead-letter replay.
+3. Add deployment-specific worker health and lag monitoring.
 4. Re-measure the composite widget index on realistic row counts.
-5. CI running ruff, strict mypy, and pytest; then a deployed environment with TLS and backups.
+5. Add CI, TLS termination, backups, and log shipping for a deployed environment.

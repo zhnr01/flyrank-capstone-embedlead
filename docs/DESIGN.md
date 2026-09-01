@@ -16,7 +16,7 @@ A widget owner needs to configure a small lead-capture widget, paste one script 
 | Geo providers | Return location guesses | Nothing until response shape is validated; availability is optional |
 | Notification provider | Deliver email/webhook | Delivery result only; it cannot decide whether a lead exists |
 | PostgreSQL | Hold durable source-of-truth state | Constraints and committed transaction results |
-| Redis | Counters and task transport | Disposable; never the only copy of a lead |
+| Redis | Shared rate-limit counters | Disposable; never the only copy of business data |
 
 Critical distinction: CORS controls whether browser JavaScript may read/call across origins. It does not authenticate the visitor, prove widget ownership, or stop curl/bots.
 
@@ -62,14 +62,13 @@ OPTIONS preflight (when browser requires it)
 
 ### Tenant
 
-- `id INTEGER PRIMARY KEY`
+- `id BIGINT PRIMARY KEY`
 - `name VARCHAR(120) NOT NULL`
-- `created_at TIMESTAMPTZ NOT NULL`
 
 ### Membership
 
-- `tenant_id INTEGER NOT NULL REFERENCES tenant(id)`
-- `user_id INTEGER NOT NULL REFERENCES user(id)`
+- `tenant_id BIGINT NOT NULL REFERENCES tenants(id)`
+- `user_id BIGINT NOT NULL REFERENCES users(id)`
 - `role VARCHAR(30) NOT NULL`
 - primary key `(tenant_id, user_id)`
 
@@ -77,39 +76,34 @@ The membership connects identity to tenant authority. A global `user.tenant_id` 
 
 ### Widget
 
-- `id INTEGER PRIMARY KEY` — internal identity
-- `tenant_id INTEGER NOT NULL REFERENCES tenant(id)`
+- `id BIGINT PRIMARY KEY` — internal identity
+- `tenant_id BIGINT NOT NULL REFERENCES tenants(id)`
 - `name VARCHAR(120) NOT NULL`
 - `kind VARCHAR(30) NOT NULL`
-- `title VARCHAR(160) NOT NULL`
-- `description VARCHAR(500)`
-- `button_text VARCHAR(80) NOT NULL`
-- `fields JSONB NOT NULL`
-- `is_active BOOLEAN NOT NULL DEFAULT true`
-- `created_at`, `updated_at TIMESTAMPTZ NOT NULL`
+- `config JSONB NULL`
 
 Indexes/constraints:
 
-- index `(tenant_id, created_at DESC, id DESC)` for owner lists
-- unique `(tenant_id, name)` to prevent ambiguous dashboard names
-- check that `kind` is one of the implemented widget kinds
+- index `(tenant_id, id)` for owner lists
 
 ### Submission
 
-- `id INTEGER PRIMARY KEY`
-- `widget_id INTEGER NOT NULL REFERENCES widget(id)`
-- `tenant_id INTEGER NOT NULL REFERENCES tenant(id)` — deliberately duplicated for direct tenant-scoped analytics and defence in depth
-- `payload JSONB NOT NULL`
-- `country_code VARCHAR(2)`
-- `city VARCHAR(120)`
-- `ip_hash VARCHAR(64)` — avoid retaining the raw address after enrichment unless the final policy requires it
-- `user_agent VARCHAR(512)`
+- `id BIGINT PRIMARY KEY`
+- `widget_id BIGINT NOT NULL REFERENCES widgets(id)`
+- `tenant_id BIGINT NOT NULL REFERENCES tenants(id)` — deliberately duplicated for direct tenant-scoped analytics and defence in depth
+- `email VARCHAR(320) NOT NULL`
+- `name VARCHAR(120) NOT NULL`
+- `message TEXT NULL`
+- `geo_country VARCHAR(2) NULL`
+- `geo_city VARCHAR(120) NULL`
+- `geo_provider VARCHAR(30) NULL`
+- `answers JSONB NULL`
 - `created_at TIMESTAMPTZ NOT NULL`
 
 Indexes:
 
-- `(tenant_id, created_at DESC, id DESC)` for dashboard pagination
-- `(tenant_id, widget_id, created_at DESC)` for per-widget analytics
+- `(tenant_id, id)` for dashboard pagination
+- `(tenant_id, created_at)` for time-series analytics
 
 ### OutboxEvent
 
@@ -132,7 +126,7 @@ Prefix: `/api/v1`.
 | `GET /widgets` | 200 | Cursor-paginated tenant widget list |
 | `GET /widgets/{id}` | 200 | Read tenant widget |
 | `PATCH /widgets/{id}` | 200 | Partial update |
-| `DELETE /widgets/{id}` | 204 | Delete/deactivate according to final retention decision |
+| `DELETE /widgets/{id}` | 204 | Hard-delete a widget in the authenticated tenant |
 | `GET /widgets/{id}/embed` | 200 | Return script snippet |
 | `GET /dashboard/submissions` | 200 | Cursor-paginated tenant lead list |
 | `GET /dashboard/stats` | 200 | Counts over time, per-widget, and geo breakdown |
@@ -227,7 +221,7 @@ Each tracer uses RED -> GREEN -> REFACTOR and adds its real output to `EVIDENCE.
 
 ## 10. Explicit non-goals
 
-Until the core acceptance probes are green:
+The following remain explicit non-goals for the current release:
 
 - no Kubernetes, cloud deployment, real CDN, or custom domain
 - no microservices

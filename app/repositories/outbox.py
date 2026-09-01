@@ -1,3 +1,4 @@
+from dataclasses import replace
 from itertools import count
 from typing import Protocol
 
@@ -155,11 +156,8 @@ class InMemoryOutboxRepository:
 
     def mark_sent(self, message_id: int, *, attempts: int) -> None:
         message = self._messages[message_id]
-        self._messages[message_id] = OutboxMessage(
-            id=message.id,
-            topic=message.topic,
-            idempotency_key=message.idempotency_key,
-            payload=message.payload,
+        self._messages[message_id] = replace(
+            message,
             status=OutboxStatus.SENT,
             attempts=attempts,
             last_error=None,
@@ -174,11 +172,8 @@ class InMemoryOutboxRepository:
         exhausted: bool,
     ) -> None:
         message = self._messages[message_id]
-        self._messages[message_id] = OutboxMessage(
-            id=message.id,
-            topic=message.topic,
-            idempotency_key=message.idempotency_key,
-            payload=message.payload,
+        self._messages[message_id] = replace(
+            message,
             status=(
                 OutboxStatus.FAILED if exhausted else OutboxStatus.PENDING
             ),

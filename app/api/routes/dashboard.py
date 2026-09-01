@@ -63,14 +63,21 @@ def submission_stats(
     return DashboardStatsResponse(
         total_submissions=stats.total_submissions,
         by_country=[
-            CountryCountResponse(country=item.country, count=item.count)
-            for item in stats.by_country
+            CountryCountResponse(
+                country=country_count.country,
+                count=country_count.count,
+            )
+            for country_count in stats.by_country
         ],
         by_widget=[
-            WidgetCountResponse(widget_id=item.widget_id, count=item.count)
-            for item in stats.by_widget
+            WidgetCountResponse(
+                widget_id=widget_count.widget_id,
+                count=widget_count.count,
+            )
+            for widget_count in stats.by_widget
         ],
         by_day=[
-            DailyCountResponse(day=item.day, count=item.count) for item in daily
+            DailyCountResponse(day=daily_count.day, count=daily_count.count)
+            for daily_count in daily
         ],
     )
